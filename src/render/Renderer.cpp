@@ -227,7 +227,14 @@ WP<Render::GL::CHyprOpenGLImpl> IHyprRenderer::glBackend() {
     return Render::GL::g_pHyprOpenGL;
 }
 
+bool Render::shouldExcludeFromCapture(bool captureExclusionPass, bool noScreenShare) {
+    return captureExclusionPass && noScreenShare;
+}
+
 bool IHyprRenderer::shouldRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor) {
+    if (Render::shouldExcludeFromCapture(m_bCaptureExclusionPass, pWindow->m_ruleApplicator->noScreenShare().valueOrDefault()))
+        return false;
+
     if (!pWindow->visibleOnMonitor(pMonitor))
         return false;
 
@@ -937,6 +944,9 @@ void IHyprRenderer::renderLayer(PHLLS pLayer, PHLMONITOR pMonitor, const Time::s
         return;
 
     if (!pLayer->visible())
+        return;
+
+    if (Render::shouldExcludeFromCapture(m_bCaptureExclusionPass, pLayer->m_ruleApplicator->noScreenShare().valueOrDefault()))
         return;
 
     // skip rendering based on abovelock rule and make sure to not render abovelock layers twice
