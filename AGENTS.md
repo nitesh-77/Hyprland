@@ -48,3 +48,17 @@
  - violating clang-tidy (`.clang-tidy`)
  - manual C-style cleanup: `some_c_thing_new()` and `some_c_thing_free()` can be wrapped.
 - Make sure to write tests for code which our Unit (`tests/`) or Integration (`hyprtester/`) tests can test.
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked as GitHub issues (`gh` CLI) on the `origin` remote. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five canonical triage labels, each string equal to its role name. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
