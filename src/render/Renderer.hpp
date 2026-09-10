@@ -56,6 +56,20 @@ namespace Render {
     class IElementRenderer;
     class CRenderPass;
 
+    // Pure decision logic for the capture-exclusion feature (see CONTEXT.md,
+    // docs/adr/0001-capture-exclusion-kill-switch.md): given whether a capture-exclusion
+    // render is currently in progress and whether the surface under consideration has
+    // noScreenShare set, should that surface be excluded from the render?
+    // Deliberately takes only primitive bools, not PHLWINDOW/PHLMONITOR/PHLLS, so it is
+    // directly unit-testable without constructing real window/monitor/layer objects.
+    // Used identically by IHyprRenderer::shouldRenderWindow(PHLWINDOW, PHLMONITOR) and
+    // IHyprRenderer::renderLayer() — wiring real object state into this predicate at
+    // those two call sites is covered by ticket #3's hyprtester integration client, not
+    // by this function's own unit tests. Defined in Renderer.cpp, not inline here, per
+    // this codebase's preference to avoid function bodies in headers; the test binary
+    // links hyprland_lib, so it resolves at link time like any other declared function.
+    bool shouldExcludeFromCapture(bool captureExclusionPass, bool noScreenShare);
+
     class IHyprRenderer {
       public:
         IHyprRenderer();
@@ -108,20 +122,23 @@ namespace Render {
         NColorManagement::PImageDescription workBufferImageDescription();
         bool                                m_bBlockSurfaceFeedback = false;
         bool                                m_bRenderingSnapshot    = false;
-        PHLMONITORREF                       m_mostHzMonitor;
-        bool                                m_directScanoutBlocked = false;
+        bool                                m_bCaptureExclusionPass = false; // true while performing a capture-exclusion render (true-capture-exclusion feature);
+                                                                             // see CONTEXT.md and docs/adr/0001-capture-exclusion-kill-switch.md at repo root.
+                                                                             // Set/reset around the relevant render call; must never leak true across calls.
+        PHLMONITORREF                   m_mostHzMonitor;
+        bool                            m_directScanoutBlocked = false;
 
-        void                                setSurfaceScanoutMode(SP<CWLSurfaceResource> surface, PHLMONITOR monitor); // nullptr monitor resets
+        void                            setSurfaceScanoutMode(SP<CWLSurfaceResource> surface, PHLMONITOR monitor); // nullptr monitor resets
 
-        void                                initiateManualCrash();
-        const SRenderData&                  renderData();
+        void                            initiateManualCrash();
+        const SRenderData&              renderData();
 
-        bool                                m_crashingInProgress = false;
-        float                               m_crashingDistort    = 0.5f;
-        wl_event_source*                    m_crashingLoop       = nullptr;
-        wl_event_source*                    m_cursorTicker       = nullptr;
+        bool                            m_crashingInProgress = false;
+        float                           m_crashingDistort    = 0.5f;
+        wl_event_source*                m_crashingLoop       = nullptr;
+        wl_event_source*                m_cursorTicker       = nullptr;
 
-        std::vector<CHLBufferReference>     m_usedAsyncBuffers;
+        std::vector<CHLBufferReference> m_usedAsyncBuffers;
 
         struct {
             int                                          hotspotX      = 0;
