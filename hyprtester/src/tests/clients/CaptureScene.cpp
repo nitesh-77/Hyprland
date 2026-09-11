@@ -18,8 +18,12 @@
 // renderWorkspace()) - captureExclusionCursorVisible only proves it on the OLD, unchanged
 // early-exit/mirror-texture path, since its scene has no flagged surface.
 //
-// The kill-switch path (HYPRLAND_DISABLE_CAPTURE_EXCLUSION -> black box) is ticket #5 and
-// is asserted separately once that lands, not here.
+// The kill-switch path (HYPRLAND_DISABLE_CAPTURE_EXCLUSION -> black box) is ticket #5.
+// captureExclusionTrueExclusion and captureExclusionCursorVisibleOnExclusionPath below are
+// parameterized on getenv("HYPRLAND_DISABLE_CAPTURE_EXCLUSION") rather than duplicated into a
+// second test file - the compositor process is launched once for the whole hyprtester run, so
+// exercising both states means running this binary twice: once with the var unset in the
+// environment hyprtester itself is launched from, once with it set.
 
 #include <array>
 #include <chrono>
@@ -215,6 +219,15 @@ namespace {
 }
 
 TEST_CASE(captureExclusionTrueExclusion) {
+    // Ticket #5: this test is parameterized on HYPRLAND_DISABLE_CAPTURE_EXCLUSION rather than
+    // duplicated into a second test file. The compositor process itself is launched once for
+    // the whole hyprtester run (see hyprtester/src/main.cpp), so the env var can't be flipped
+    // between TEST_CASEs within a single run - it has to be set (or not) for the entire
+    // hyprtester invocation. Run this binary twice - once with the var unset, once with it set
+    // in the environment hyprtester itself is launched from - to exercise both states; the
+    // scene and every dispatch/assertion up to the final pixel check is identical either way.
+    const bool KILL_SWITCH_SET = getenv("HYPRLAND_DISABLE_CAPTURE_EXCLUSION") != nullptr;
+
     // Bottom window: plain, green - what would be "behind" the flagged window. Explicitly
     // floated and positioned/sized so its on-screen box is known exactly, rather than
     // relying on wherever the default tiling layout happens to place it.
@@ -271,14 +284,27 @@ TEST_CASE(captureExclusionTrueExclusion) {
 
     const auto& PIXEL = result->at(0);
 
-    // True exclusion (ticket #4): the flagged top window (0,0,255) is skipped during the
-    // capture composite, so the BOTTOM window behind it (0,255,0) shows through at this
-    // sample point. NOT black (0,0,0) - that was the old black-box behavior this ticket
-    // replaced - and NOT the flagged window's own blue (0,0,255).
-    EXPECT(PIXEL.r, 0);
-    EXPECT(PIXEL.g, 255);
-    EXPECT(PIXEL.b, 0);
-    EXPECT(PIXEL.a, 255);
+    if (KILL_SWITCH_SET) {
+        // Ticket #5: with HYPRLAND_DISABLE_CAPTURE_EXCLUSION set, renderMonitor() must take
+        // the exact pre-#4 black-box path unconditionally, regardless of the top window's
+        // no_screen_share flag - i.e. an opaque black rectangle, matching #3's original
+        // assertion before #4 flipped it. NOT the bottom window's green (that would mean the
+        // switch failed to disable true exclusion) and NOT the flagged window's own blue.
+        NLog::yellow("HYPRLAND_DISABLE_CAPTURE_EXCLUSION is set - expecting black-box pixels");
+        EXPECT(PIXEL.r, 0);
+        EXPECT(PIXEL.g, 0);
+        EXPECT(PIXEL.b, 0);
+        EXPECT(PIXEL.a, 255);
+    } else {
+        // True exclusion (ticket #4, unaffected by #5 when the switch is unset): the flagged
+        // top window (0,0,255) is skipped during the capture composite, so the BOTTOM window
+        // behind it (0,255,0) shows through at this sample point. NOT black (0,0,0) - that
+        // was the old black-box behavior - and NOT the flagged window's own blue (0,0,255).
+        EXPECT(PIXEL.r, 0);
+        EXPECT(PIXEL.g, 255);
+        EXPECT(PIXEL.b, 0);
+        EXPECT(PIXEL.a, 255);
+    }
 }
 
 TEST_CASE(captureExclusionCursorVisibleOnExclusionPath) {
@@ -295,6 +321,15 @@ TEST_CASE(captureExclusionCursorVisibleOnExclusionPath) {
     // and samples the cursor at a point inside the flagged window's box - i.e. the cursor is
     // drawn on top of a region whose real surface was skipped by the new render, which is
     // exactly the scenario the ticket's cursor-verification item is about.
+    //
+    // Ticket #5: with HYPRLAND_DISABLE_CAPTURE_EXCLUSION set, this same scene's flagged window
+    // takes the restored black-box branch instead - the sample point is covered by an opaque
+    // black rectangle regardless of the cursor, since the pre-#4 cursor call (like this one)
+    // is unforced and relies on the mirror texture's already-baked-in cursor, not on drawing
+    // over the black box. A cursor-difference check would be meaningless there, so this test
+    // asserts black-box pixels in that case instead, same as captureExclusionTrueExclusion.
+    const bool          KILL_SWITCH_SET = getenv("HYPRLAND_DISABLE_CAPTURE_EXCLUSION") != nullptr;
+
     CCaptureSceneClient bottom;
     if (!bottom.ok())
         FAIL_TEST("Couldn't start the bottom capture-scene client");
@@ -343,6 +378,22 @@ TEST_CASE(captureExclusionCursorVisibleOnExclusionPath) {
     const auto& CURSOR_PIXEL = result->at(0);
     const auto& PLAIN_PIXEL  = result->at(1);
 
+    if (KILL_SWITCH_SET) {
+        // Restored black-box branch: both sample points fall inside the flagged window's
+        // opaque black box, regardless of the cursor - matching #3's original black-box
+        // assertion, not a cursor-visibility one.
+        NLog::yellow("HYPRLAND_DISABLE_CAPTURE_EXCLUSION is set - expecting black-box pixels at both points");
+        EXPECT(CURSOR_PIXEL.r, 0);
+        EXPECT(CURSOR_PIXEL.g, 0);
+        EXPECT(CURSOR_PIXEL.b, 0);
+        EXPECT(CURSOR_PIXEL.a, 255);
+        EXPECT(PLAIN_PIXEL.r, 0);
+        EXPECT(PLAIN_PIXEL.g, 0);
+        EXPECT(PLAIN_PIXEL.b, 0);
+        EXPECT(PLAIN_PIXEL.a, 255);
+        return;
+    }
+
     // At the cursor position, the pixel must differ from the true-exclusion background
     // (green) - proving the cursor is composited on top of the new renderWorkspace()-based
     // capture-exclusion render, not silently absent because that render is a different code
@@ -368,6 +419,12 @@ TEST_CASE(captureExclusionCursorVisible) {
     // capture, at a point away from any no_screen_share surface. This scene has no flagged
     // surface, so renderMonitor() takes the early-exit (cheap mirror-texture) path - this
     // guards that the cursor overlay wasn't lost as a side effect of the render-body change.
+    //
+    // Ticket #5: this test is deliberately NOT parameterized on HYPRLAND_DISABLE_CAPTURE_EXCLUSION.
+    // With zero flagged surfaces, both the #4 early-exit branch and the pre-#4/kill-switch
+    // black-box branch reduce to the exact same mirror-texture blit (the black-box loops in
+    // both have nothing to draw), so this test's assertions hold unchanged whether the switch
+    // is set or not - confirmed by running it both ways, not assumed from reading code alone.
     // The window is explicitly
     // floated and positioned/sized so both the "under the cursor" and "elsewhere" sample
     // points are known to land inside vs. outside it, rather than guessing based on

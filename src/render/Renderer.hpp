@@ -125,6 +125,12 @@ namespace Render {
         bool                                m_bCaptureExclusionPass = false; // true while performing a capture-exclusion render (true-capture-exclusion feature);
                                                                              // see CONTEXT.md and docs/adr/0001-capture-exclusion-kill-switch.md at repo root.
                                                                              // Set/reset around the relevant render call; must never leak true across calls.
+        const bool m_bCaptureExclusionDisabled;                              // startup-only kill-switch for the capture-exclusion render
+                                                                             // (HYPRLAND_DISABLE_CAPTURE_EXCLUSION); see docs/adr/0001-capture-exclusion-kill-switch.md.
+                                                                             // Read via getenv() exactly once, in the constructor, and never re-read afterward -
+                                                                             // this is a restart-to-recover mechanism, not a live/mid-session toggle. When true,
+                                                                             // renderMonitor() must take the pre-#4 black-box path unconditionally, regardless
+                                                                             // of m_bCaptureExclusionPass or any no_screen_share flag.
         PHLMONITORREF                   m_mostHzMonitor;
         bool                            m_directScanoutBlocked = false;
 

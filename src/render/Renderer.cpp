@@ -86,7 +86,12 @@ static int cursorTicker(void* data) {
     return 0;
 }
 
-IHyprRenderer::IHyprRenderer() {
+IHyprRenderer::IHyprRenderer() :
+    // Startup-only kill-switch (see docs/adr/0001-capture-exclusion-kill-switch.md): read
+    // HYPRLAND_DISABLE_CAPTURE_EXCLUSION via getenv() exactly once, here, and cache it for
+    // the lifetime of this renderer/process. Deliberately not re-read anywhere else - this
+    // is a restart-to-recover mechanism, not a live toggle (per the ADR's explicit scope).
+    m_bCaptureExclusionDisabled(getenv("HYPRLAND_DISABLE_CAPTURE_EXCLUSION") != nullptr) {
     m_globalTimer.reset();
     pushMonitorTransformEnabled(false);
 
