@@ -13,6 +13,11 @@
 // hyprland-capture-exclusion-investigation.md and spec-true-capture-exclusion.md
 // (Testing Decisions / Seam 2) at the repo root.
 //
+// captureExclusionCursorVisibleOnExclusionPath below specifically re-uses this flagged-window
+// scene to prove cursor visibility on the NEW render path (m_bCaptureExclusionPass +
+// renderWorkspace()) - captureExclusionCursorVisible only proves it on the OLD, unchanged
+// early-exit/mirror-texture path, since its scene has no flagged surface.
+//
 // The kill-switch path (HYPRLAND_DISABLE_CAPTURE_EXCLUSION -> black box) is ticket #5 and
 // is asserted separately once that lands, not here.
 
@@ -274,6 +279,88 @@ TEST_CASE(captureExclusionTrueExclusion) {
     EXPECT(PIXEL.g, 255);
     EXPECT(PIXEL.b, 0);
     EXPECT(PIXEL.a, 255);
+}
+
+TEST_CASE(captureExclusionCursorVisibleOnExclusionPath) {
+    // Cursor-visibility check for ticket #4, ON THE ACTUAL NEW RENDER PATH.
+    //
+    // captureExclusionCursorVisible (below) only proves the cursor survives when nothing is
+    // flagged - that scene takes the early-exit (cheap mirror-texture) branch of
+    // renderMonitor(), which is the OLD, unchanged code. It does not exercise the new
+    // m_bCaptureExclusionPass + renderWorkspace() branch at all, so it cannot prove the
+    // acceptance criterion "cursor visibility is preserved in the capture-exclusion render."
+    //
+    // This test closes that gap: it reuses the same two-window, one-flagged scene as
+    // captureExclusionTrueExclusion (so renderMonitor() actually takes the exclusion branch),
+    // and samples the cursor at a point inside the flagged window's box - i.e. the cursor is
+    // drawn on top of a region whose real surface was skipped by the new render, which is
+    // exactly the scenario the ticket's cursor-verification item is about.
+    CCaptureSceneClient bottom;
+    if (!bottom.ok())
+        FAIL_TEST("Couldn't start the bottom capture-scene client");
+
+    EXPECT(bottom.setColor(0, 255, 0), true);
+    EXPECT(getFromSocket(std::format("/dispatch hl.dsp.window.float({{ action = 'set', window = 'pid:{}' }})", bottom.pid())), std::string{"ok"});
+    EXPECT(getFromSocket(std::format("/dispatch hl.dsp.window.resize({{ x = 400, y = 300, window = 'pid:{}' }})", bottom.pid())), std::string{"ok"});
+    EXPECT(getFromSocket(std::format("/dispatch hl.dsp.window.move({{ x = 100, y = 100, window = 'pid:{}' }})", bottom.pid())), std::string{"ok"});
+
+    CCaptureSceneClient top;
+    if (!top.ok())
+        FAIL_TEST("Couldn't start the top capture-scene client");
+
+    EXPECT(top.setColor(0, 0, 255), true);
+    EXPECT(getFromSocket(std::format("/dispatch hl.dsp.window.float({{ action = 'set', window = 'pid:{}' }})", top.pid())), std::string{"ok"});
+    EXPECT(getFromSocket(std::format("/dispatch hl.dsp.window.resize({{ x = 400, y = 300, window = 'pid:{}' }})", top.pid())), std::string{"ok"});
+    EXPECT(getFromSocket(std::format("/dispatch hl.dsp.window.move({{ x = 100, y = 100, window = 'pid:{}' }})", top.pid())), std::string{"ok"});
+
+    {
+        auto clients = getFromSocket("/clients");
+        EXPECT_COUNT_STRING(clients, "at: 100,100", 2);
+        EXPECT_COUNT_STRING(clients, "size: 400,300", 2);
+    }
+
+    EXPECT(getFromSocket(std::format("/dispatch hl.dsp.window.set_prop({{ window = 'pid:{}', prop = 'no_screen_share', value = '1' }})", top.pid())), std::string{"ok"});
+    EXPECT(getFromSocket(std::format("/dispatch hl.dsp.focus({{ window = 'pid:{}' }})", top.pid())), std::string{"ok"});
+
+    // Cursor point: inside the shared box (100,100)-(500,400), same sample point
+    // captureExclusionTrueExclusion uses for the non-cursor pixel check, so it lands on the
+    // true-exclusion result (bottom window's green) when the cursor overlay is absent, and
+    // must show the cursor when overlay_cursor is requested.
+    EXPECT(getFromSocket("/dispatch hl.dsp.cursor.move({ x = 200, y = 150 })"), std::string{"ok"});
+    Tests::sync();
+
+    // "Elsewhere" point: still inside the shared, flagged-and-excluded box, but far from the
+    // cursor - both points sample the true-exclusion result (green), so the only expected
+    // difference between them is the cursor overlay itself, not window-boundary noise or the
+    // flagged window's own color leaking through.
+    auto result = bottom.capture(/*overlayCursor=*/true, {{200, 150}, {450, 350}});
+    if (!result)
+        FAIL_TEST("Capture failed or timed out");
+
+    if (result->size() != 2)
+        FAIL_TEST("Expected exactly two captured pixels, got {}", result->size());
+
+    const auto& CURSOR_PIXEL = result->at(0);
+    const auto& PLAIN_PIXEL  = result->at(1);
+
+    // At the cursor position, the pixel must differ from the true-exclusion background
+    // (green) - proving the cursor is composited on top of the new renderWorkspace()-based
+    // capture-exclusion render, not silently absent because that render is a different code
+    // path than the one the cursor draw call was originally validated against.
+    const bool CURSOR_VISIBLE = CURSOR_PIXEL.r != 0 || CURSOR_PIXEL.g != 255 || CURSOR_PIXEL.b != 0;
+    if (!CURSOR_VISIBLE)
+        MARK_TEST_FAILED("Expected cursor pixel to differ from true-exclusion green, got ({}, {}, {}, {})", CURSOR_PIXEL.r, CURSOR_PIXEL.g, CURSOR_PIXEL.b, CURSOR_PIXEL.a);
+    else
+        LOG_OK("Cursor pixel differs from true-exclusion background; cursor is visible on the exclusion render path. Got ({}, {}, {}, {})", CURSOR_PIXEL.r, CURSOR_PIXEL.g,
+               CURSOR_PIXEL.b, CURSOR_PIXEL.a);
+
+    // Away from the cursor, the true-exclusion result must still hold: the flagged (blue)
+    // top window is absent, and the bottom window's green shows through - not black, and
+    // not blue.
+    EXPECT(PLAIN_PIXEL.r, 0);
+    EXPECT(PLAIN_PIXEL.g, 255);
+    EXPECT(PLAIN_PIXEL.b, 0);
+    EXPECT(PLAIN_PIXEL.a, 255);
 }
 
 TEST_CASE(captureExclusionCursorVisible) {

@@ -217,6 +217,18 @@ void CScreenshareFrame::renderMonitor() {
     // exactly the same pixels as the cheap mirror-texture blit, so take the cheap path and skip
     // the second full composite entirely. This keeps the feature's cost at zero when it isn't
     // in use. No black-box loop is needed here either — nothing is flagged.
+
+    // Whether the true-exclusion branch below ran, vs. the cheap mirror-texture branch.
+    // Needed by the cursor draw call further down: the mirror-texture path's cursor may
+    // already be baked into the texture by the normal per-frame render (which draws the
+    // cursor with screencopy=false), so renderSoftwareCursorsFor()'s own screencopy-vs-
+    // software-cursor guard correctly no-ops there to avoid double-drawing it. The
+    // true-exclusion path has no such pre-existing texture - renderWorkspace() re-composites
+    // the scene from scratch and never includes the cursor - so that same guard would
+    // silently drop the cursor entirely unless forced. See renderWindow()'s equivalent call
+    // below (forceRender=true) for the existing precedent this follows.
+    bool tookExclusionPath = false;
+
     if (!monitorHasNoScreenShareSurface(PMONITOR)) {
         auto TEXTURE = g_pHyprRenderer->m_renderData.pMonitor->resources()->getMirrorTexture();
         if (!TEXTURE) {
@@ -256,6 +268,8 @@ void CScreenshareFrame::renderMonitor() {
             {0, 0, PMONITOR->m_pixelSize.x, PMONITOR->m_pixelSize.y});
         g_pHyprRenderer->m_renderData.renderModif.enabled = OLD;
     } else {
+        tookExclusionPath = true;
+
         // True capture-exclusion render (see CONTEXT.md, spec-true-capture-exclusion.md).
         //
         // Instead of drawing the fully-composited mirror texture (which has every window's real
@@ -298,7 +312,7 @@ void CScreenshareFrame::renderMonitor() {
     if (m_overlayCursor) {
         CRegion  fakeDamage = {0, 0, INT16_MAX, INT16_MAX};
         Vector2D cursorPos  = g_pInputManager->getMouseCoordsInternal() - PMONITOR->m_position - m_session->m_captureBox.pos() / PMONITOR->m_scale;
-        Pointer::mgr()->renderSoftwareCursorsFor(PMONITOR, Time::steadyNow(), fakeDamage, cursorPos, true);
+        Pointer::mgr()->renderSoftwareCursorsFor(PMONITOR, Time::steadyNow(), fakeDamage, cursorPos, true, tookExclusionPath);
     }
 }
 
