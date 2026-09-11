@@ -188,6 +188,11 @@ namespace Screenshare {
         void renderMonitorRegion();
         void renderWindow();
 
+        // true if the captured monitor has any no_screen_share-flagged window or layer that the
+        // capture-exclusion render would actually skip; used to early-exit to the cheap
+        // mirror-texture path when nothing is flagged (true-capture-exclusion feature).
+        bool monitorHasNoScreenShareSurface(PHLMONITOR pMonitor);
+
         void storeTempFB();
 
         friend class CScreenshareManager;

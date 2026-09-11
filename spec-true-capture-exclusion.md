@@ -197,13 +197,19 @@ OLD;`).
 
 **Cursor.** The mirror-texture path being replaced draws the cursor via
 `m_overlayCursor` → `Pointer::mgr()->renderSoftwareCursorsFor(...)`, called from
-`renderMonitor()` itself, after the (now-removed) black-box loop. This call is untouched
-by this patch and continues to run after the new `renderWorkspace()` call, in the same
-position relative to the rest of the function — it does not depend on the mirror texture
-or the black-box loop, only on `m_overlayCursor` and monitor/cursor state, so cursor
-visibility in the capture is expected to be unaffected. This must be verified empirically
-once the render-body change lands (see Testing Decisions), not assumed from reading code
-alone.
+`renderMonitor()` itself, after the (now-removed) black-box loop. This call continues to
+run after the new `renderWorkspace()` call, in the same position relative to the rest of
+the function. **Empirical verification (required by this section, not assumed from
+reading code alone) found that this call did need one change**: the true-exclusion branch
+has no pre-existing mirror texture with the cursor already baked in (unlike the
+mirror-texture branch, which relies on the normal per-frame render having drawn it there),
+so `renderSoftwareCursorsFor()`'s own screencopy-vs-software-cursor guard silently dropped
+the cursor on the new path unless `forceRender=true` is passed — exactly the existing
+precedent already used by `renderWindow()`'s equivalent call. The fix passes
+`forceRender` only when the true-exclusion branch actually ran, so the mirror-texture
+branch's behavior (and its reliance on the guard to avoid double-drawing) is unchanged.
+This gap was caught by hyprtester (`captureExclusionCursorVisibleOnExclusionPath`), not
+by reading the code — confirming this section's own instruction to verify empirically.
 
 **Early-exit optimization.** Before performing the capture-exclusion render,
 `renderMonitor()` checks whether the monitor has any `no_screen_share`-flagged window or

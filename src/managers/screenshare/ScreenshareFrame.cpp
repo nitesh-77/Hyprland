@@ -3,7 +3,6 @@
 #include "../input/InputManager.hpp"
 #include "../permissions/DynamicPermissionManager.hpp"
 #include "../../protocols/ColorManagement.hpp"
-#include "../../protocols/XDGShell.hpp"
 #include "../../Compositor.hpp"
 #include "../../render/Renderer.hpp"
 #include "../../render/OpenGL.hpp"
@@ -12,9 +11,7 @@
 #include "../../desktop/view/Window.hpp"
 #include "../../desktop/state/FocusState.hpp"
 #include "../../render/pass/ClearPassElement.hpp"
-#include "../../render/pass/RectPassElement.hpp"
 #include "helpers/cm/ColorManagement.hpp"
-#include "../../managers/fullscreen/FullscreenController.hpp"
 #include <hyprutils/math/Region.hpp>
 #include <hyprgraphics/egl/Egl.hpp>
 
@@ -173,143 +170,149 @@ void CScreenshareFrame::copy() {
         m_callback(RESULT_NOT_COPIED);
 }
 
+bool CScreenshareFrame::monitorHasNoScreenShareSurface(PHLMONITOR pMonitor) {
+    // Windows: only those that would actually be rendered on this monitor count — a flagged
+    // window that wouldn't be drawn anyway makes no difference to the output, so it must not
+    // force the expensive path. m_bCaptureExclusionPass is false here, so shouldRenderWindow()
+    // evaluates normally (it does not yet exclude flagged windows).
+    for (auto const& w : Desktop::windowState()->windows()) {
+        if (!w->m_ruleApplicator->noScreenShare().valueOrDefault())
+            continue;
+
+        if (!g_pHyprRenderer->shouldRenderWindow(w, pMonitor))
+            continue;
+
+        if (w->isHidden())
+            continue;
+
+        return true;
+    }
+
+    // Layers: check exactly the per-monitor layer sets the capture-exclusion render iterates
+    // (via renderAllClientsForWorkspace), so the check matches what would actually be skipped.
+    for (auto const& lsl : pMonitor->m_layerSurfaceLayers) {
+        for (auto const& lsref : lsl) {
+            const auto ls = lsref.lock();
+            if (!ls || !ls->m_ruleApplicator->noScreenShare().valueOrDefault())
+                continue;
+
+            if (!ls->visible())
+                continue;
+
+            return true;
+        }
+    }
+
+    return false;
+}
+
 void CScreenshareFrame::renderMonitor() {
     if ((m_session->m_type != SHARE_MONITOR && m_session->m_type != SHARE_REGION) || done())
         return;
 
     const auto PMONITOR = m_session->monitor();
 
-    auto       TEXTURE = g_pHyprRenderer->m_renderData.pMonitor->resources()->getMirrorTexture();
-    if (!TEXTURE) {
-        LOGM(Log::ERR, "Invalid source texture");
-        return;
-    }
+    // Early-exit optimization (see CONTEXT.md, spec-true-capture-exclusion.md): if nothing on
+    // this monitor is flagged no_screen_share, the capture-exclusion render would produce
+    // exactly the same pixels as the cheap mirror-texture blit, so take the cheap path and skip
+    // the second full composite entirely. This keeps the feature's cost at zero when it isn't
+    // in use. No black-box loop is needed here either — nothing is flagged.
 
-    if (!TEXTURE->m_imageDescription)
-        Log::logger->log(Log::ERR, "CM: FIXME no source image description for screenshare");
+    // Whether the true-exclusion branch below ran, vs. the cheap mirror-texture branch.
+    // Needed by the cursor draw call further down: the mirror-texture path's cursor may
+    // already be baked into the texture by the normal per-frame render (which draws the
+    // cursor with screencopy=false), so renderSoftwareCursorsFor()'s own screencopy-vs-
+    // software-cursor guard correctly no-ops there to avoid double-drawing it. The
+    // true-exclusion path has no such pre-existing texture - renderWorkspace() re-composites
+    // the scene from scratch and never includes the cursor - so that same guard would
+    // silently drop the cursor entirely unless forced. See renderWindow()'s equivalent call
+    // below (forceRender=true) for the existing precedent this follows.
+    bool tookExclusionPath = false;
 
-    if (!g_pHyprRenderer->m_renderData.currentFB->imageDescription())
-        Log::logger->log(Log::ERR, "CM: FIXME no target image description for screenshare");
+    if (!monitorHasNoScreenShareSurface(PMONITOR)) {
+        auto TEXTURE = g_pHyprRenderer->m_renderData.pMonitor->resources()->getMirrorTexture();
+        if (!TEXTURE) {
+            LOGM(Log::ERR, "Invalid source texture");
+            return;
+        }
 
-    if (TEXTURE->m_imageDescription && g_pHyprRenderer->m_renderData.currentFB->imageDescription())
-        Log::logger->log(Log::TRACE, "CM: screenshot renderMonitor {} -> {}", TEXTURE->m_imageDescription->value(),
-                         g_pHyprRenderer->m_renderData.currentFB->imageDescription()->value());
+        if (!TEXTURE->m_imageDescription)
+            Log::logger->log(Log::ERR, "CM: FIXME no source image description for screenshare");
 
-    const bool IS_CM_AWARE                        = PROTO::colorManagement && PROTO::colorManagement->isClientCMAware(m_session->m_client);
-    g_pHyprRenderer->m_renderData.transformDamage = false;
-    g_pHyprRenderer->m_renderData.noSimplify      = true;
+        if (!g_pHyprRenderer->m_renderData.currentFB->imageDescription())
+            Log::logger->log(Log::ERR, "CM: FIXME no target image description for screenshare");
 
-    // render monitor texture
-    CBox       monbox = CBox{{}, PMONITOR->m_pixelSize}
-                            .transform(Math::wlTransformToHyprutils(Math::invertTransform(PMONITOR->m_transform)), PMONITOR->m_pixelSize.x, PMONITOR->m_pixelSize.y)
-                            .translate(-m_session->m_captureBox.pos()); // vvvv kinda ass-backwards but that's how I designed the renderer... sigh.
+        if (TEXTURE->m_imageDescription && g_pHyprRenderer->m_renderData.currentFB->imageDescription())
+            Log::logger->log(Log::TRACE, "CM: screenshot renderMonitor {} -> {}", TEXTURE->m_imageDescription->value(),
+                             g_pHyprRenderer->m_renderData.currentFB->imageDescription()->value());
 
-    const auto OLD                                    = g_pHyprRenderer->m_renderData.renderModif.enabled;
-    g_pHyprRenderer->m_renderData.renderModif.enabled = false;
-    g_pHyprRenderer->startRenderPass();
-    g_pHyprRenderer->draw(
-        CTexPassElement::SRenderData{
-            .tex          = TEXTURE,
-            .box          = monbox,
-            .flipEndFrame = true,
-            .cmBackToSRGB = !IS_CM_AWARE,
-        },
-        {0, 0, PMONITOR->m_pixelSize.x, PMONITOR->m_pixelSize.y});
-    g_pHyprRenderer->m_renderData.renderModif.enabled = OLD;
+        const bool IS_CM_AWARE                        = PROTO::colorManagement && PROTO::colorManagement->isClientCMAware(m_session->m_client);
+        g_pHyprRenderer->m_renderData.transformDamage = false;
+        g_pHyprRenderer->m_renderData.noSimplify      = true;
 
-    // render black boxes for noscreenshare
-    auto hidePopups = [&](Vector2D popupBaseOffset) {
-        return [&, popupBaseOffset](WP<Desktop::View::CPopup> popup, void*) {
-            if (!popup->wlSurface() || !popup->wlSurface()->resource() || !popup->visible())
-                return;
+        // render monitor texture
+        CBox       monbox = CBox{{}, PMONITOR->m_pixelSize}
+                                .transform(Math::wlTransformToHyprutils(Math::invertTransform(PMONITOR->m_transform)), PMONITOR->m_pixelSize.x, PMONITOR->m_pixelSize.y)
+                                .translate(-m_session->m_captureBox.pos()); // vvvv kinda ass-backwards but that's how I designed the renderer... sigh.
 
-            const auto popRel = popup->coordsRelativeToParent();
-            popup->wlSurface()->resource()->breadthfirst(
-                [&](SP<CWLSurfaceResource> surf, const Vector2D& localOff, void*) {
-                    const auto size = surf->m_current.size;
-                    const auto surfBox =
-                        CBox{popupBaseOffset + popRel + localOff, size}.translate(PMONITOR->m_position).scale(PMONITOR->m_scale).translate(-m_session->m_captureBox.pos());
-
-                    if LIKELY (surfBox.w > 0 && surfBox.h > 0)
-                        g_pHyprRenderer->draw(CRectPassElement::SRectData{.box = surfBox, .color = Colors::BLACK}, surfBox);
-                },
-                nullptr);
-        };
-    };
-
-    for (auto const& l : Desktop::layerState()->layers()) {
-        if (!l->m_ruleApplicator->noScreenShare().valueOrDefault())
-            continue;
-
-        if UNLIKELY (!l->visible())
-            continue;
-
-        const auto REALPOS  = l->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
-        const auto REALSIZE = l->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
-
-        const auto noScreenShareBox = CBox{REALPOS.x, REALPOS.y, std::max(REALSIZE.x, 5.0), std::max(REALSIZE.y, 5.0)}
-                                          .translate(-PMONITOR->m_position)
-                                          .scale(PMONITOR->m_scale)
-                                          .translate(-m_session->m_captureBox.pos());
-
-        g_pHyprRenderer->draw(CRectPassElement::SRectData{.box = noScreenShareBox, .color = Colors::BLACK}, noScreenShareBox);
-
-        const auto     geom            = l->m_geometry;
-        const Vector2D popupBaseOffset = REALPOS - Vector2D{geom.pos().x, geom.pos().y};
-        if (l->m_popupHead)
-            l->m_popupHead->breadthfirst(hidePopups(popupBaseOffset), nullptr);
-    }
-
-    for (auto const& w : Desktop::windowState()->windows()) {
-        if (!w->m_ruleApplicator->noScreenShare().valueOrDefault())
-            continue;
-
-        if (!g_pHyprRenderer->shouldRenderWindow(w, PMONITOR))
-            continue;
-
-        if (w->isHidden())
-            continue;
-
-        const auto PWORKSPACE = w->m_workspace;
-
-        if UNLIKELY (!PWORKSPACE && w->alphaValue(WINDOW_ALPHA_FADE) * w->alphaValue(WINDOW_ALPHA_FULLSCREEN) != 0.f)
-            continue;
-
-        const auto renderOffset     = PWORKSPACE && !w->m_pinned ? PWORKSPACE->m_renderOffset->value() : Vector2D{};
-        const auto REALSIZE         = w->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
-        const auto REALPOS          = w->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT) + renderOffset;
-        const auto noScreenShareBox = CBox{REALPOS.x, REALPOS.y, std::max(REALSIZE.x, 5.0), std::max(REALSIZE.y, 5.0)}
-                                          .translate(-PMONITOR->m_position)
-                                          .scale(PMONITOR->m_scale)
-                                          .translate(-m_session->m_captureBox.pos());
-
-        // seems like rounding doesn't play well with how we manipulate the box position to render regions causing the window to leak through
-        const auto dontRound     = m_session->m_captureBox.pos() != Vector2D() || Fullscreen::controller()->isFullscreen(w, Fullscreen::FSMODE_FULLSCREEN);
-        const auto rounding      = dontRound ? 0 : w->rounding() * PMONITOR->m_scale;
-        const auto roundingPower = dontRound ? 2.0f : w->roundingPower();
-
+        const auto OLD                                    = g_pHyprRenderer->m_renderData.renderModif.enabled;
+        g_pHyprRenderer->m_renderData.renderModif.enabled = false;
+        g_pHyprRenderer->startRenderPass();
         g_pHyprRenderer->draw(
-            CRectPassElement::SRectData{
-                .box           = noScreenShareBox,
-                .color         = Colors::BLACK,
-                .round         = rounding,
-                .roundingPower = roundingPower,
+            CTexPassElement::SRenderData{
+                .tex          = TEXTURE,
+                .box          = monbox,
+                .flipEndFrame = true,
+                .cmBackToSRGB = !IS_CM_AWARE,
             },
-            noScreenShareBox);
+            {0, 0, PMONITOR->m_pixelSize.x, PMONITOR->m_pixelSize.y});
+        g_pHyprRenderer->m_renderData.renderModif.enabled = OLD;
+    } else {
+        tookExclusionPath = true;
 
-        if (w->m_isX11 || !w->m_popupHead)
-            continue;
+        // True capture-exclusion render (see CONTEXT.md, spec-true-capture-exclusion.md).
+        //
+        // Instead of drawing the fully-composited mirror texture (which has every window's real
+        // pixels baked in) and then painting opaque black boxes over each no_screen_share surface,
+        // we re-composite the monitor's active workspace directly into the capture buffer with
+        // m_bCaptureExclusionPass set. shouldRenderWindow()/renderLayer() (see #2) skip any
+        // no_screen_share-flagged surface during that composite, so whatever is behind it shows
+        // through naturally — the surface is simply absent, not covered.
+        //
+        // This avoids the black-box failure modes by construction: there is no rectangle to
+        // desync from its window during zoom (hyprwm/Hyprland#13150), and nothing is painted over
+        // transparency/gaps on special workspaces (hyprwm/Hyprland#11610) — nothing is drawn on
+        // top of anything at all.
+        //
+        // renderWorkspace() here is nested inside renderMonitor(), not a fresh beginRender cycle,
+        // so the transformDamage/noSimplify values it sets would leak into the cursor draw below
+        // (which runs in the same function) if not restored. renderMonitor()'s surrounding code
+        // doesn't restore these today because the next beginRender cycle resets them; that
+        // tolerance does not apply to a nested call, so we save the originals first and restore
+        // them explicitly right after the call.
+        const auto OLD_TRANSFORM_DAMAGE = g_pHyprRenderer->m_renderData.transformDamage;
+        const auto OLD_NO_SIMPLIFY      = g_pHyprRenderer->m_renderData.noSimplify;
 
-        const auto     geom            = w->m_xdgSurface->m_current.geometry;
-        const Vector2D popupBaseOffset = REALPOS - Vector2D{geom.pos().x, geom.pos().y};
+        g_pHyprRenderer->m_renderData.transformDamage = false;
+        g_pHyprRenderer->m_renderData.noSimplify      = true;
 
-        w->m_popupHead->breadthfirst(hidePopups(popupBaseOffset), nullptr);
+        // geometry translate is in pixel space; m_captureBox is already scaled/rounded to pixels
+        // (see CScreenshareSession), matching the -m_captureBox.pos() offset the old path used.
+        const CBox renderGeometry = CBox{-m_session->m_captureBox.pos().x, -m_session->m_captureBox.pos().y, PMONITOR->m_pixelSize.x, PMONITOR->m_pixelSize.y};
+
+        g_pHyprRenderer->startRenderPass();
+        g_pHyprRenderer->m_bCaptureExclusionPass = true;
+        g_pHyprRenderer->renderWorkspace(PMONITOR, PMONITOR->m_activeWorkspace, Time::steadyNow(), renderGeometry);
+        g_pHyprRenderer->m_bCaptureExclusionPass = false;
+
+        g_pHyprRenderer->m_renderData.transformDamage = OLD_TRANSFORM_DAMAGE;
+        g_pHyprRenderer->m_renderData.noSimplify      = OLD_NO_SIMPLIFY;
     }
 
     if (m_overlayCursor) {
         CRegion  fakeDamage = {0, 0, INT16_MAX, INT16_MAX};
         Vector2D cursorPos  = g_pInputManager->getMouseCoordsInternal() - PMONITOR->m_position - m_session->m_captureBox.pos() / PMONITOR->m_scale;
-        Pointer::mgr()->renderSoftwareCursorsFor(PMONITOR, Time::steadyNow(), fakeDamage, cursorPos, true);
+        Pointer::mgr()->renderSoftwareCursorsFor(PMONITOR, Time::steadyNow(), fakeDamage, cursorPos, true, tookExclusionPath);
     }
 }
 
