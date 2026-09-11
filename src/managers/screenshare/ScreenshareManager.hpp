@@ -188,6 +188,11 @@ namespace Screenshare {
         void renderMonitorRegion();
         void renderWindow();
 
+        // The restored pre-#4 black-box render body (mirror texture + black-box drawing loop),
+        // used only when the HYPRLAND_DISABLE_CAPTURE_EXCLUSION kill-switch is set - see
+        // docs/adr/0001-capture-exclusion-kill-switch.md.
+        void renderMonitorBlackBox(PHLMONITOR pMonitor);
+
         // true if the captured monitor has any no_screen_share-flagged window or layer that the
         // capture-exclusion render would actually skip; used to early-exit to the cheap
         // mirror-texture path when nothing is flagged (true-capture-exclusion feature).
