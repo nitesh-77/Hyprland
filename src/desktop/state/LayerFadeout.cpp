@@ -63,6 +63,10 @@ SP<CLayerFadeout> CLayerFadeout::create(PHLLS layer, SP<Render::IFramebuffer> sn
     if (fadeout->m_effects.textureBlur.enabled)
         fadeout->m_effects.textureBlur.ignoreAlpha = layer->m_ruleApplicator->ignoreAlpha().valueOr(0.01F);
 
+    // Capture noScreenShare now: this fadeout may outlive the layer (it's destroyed once
+    // unmapped), so the flag can't be re-checked later during renderFadeouts().
+    fadeout->m_excludedFromCapture = layer->m_ruleApplicator->noScreenShare().valueOrDefault();
+
     switch (layer->m_layer) {
         case ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND: fadeout->m_plane = FADEOUT_PLANE_LAYER_BACKGROUND; break;
         case ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM: fadeout->m_plane = FADEOUT_PLANE_LAYER_BOTTOM; break;

@@ -70,6 +70,9 @@ SP<CWindowFadeout> CWindowFadeout::create(PHLWINDOW window, SP<Render::IFramebuf
     fadeout->m_roundingPower = window->roundingPower();
     fadeout->m_blur          = shouldBlurWindow(window);
     fadeout->m_blurXray      = window->m_ruleApplicator->xray().valueOr(false);
+    // Capture noScreenShare now: this fadeout may outlive the window (it's destroyed once
+    // unmapped), so the flag can't be re-checked later during renderFadeouts().
+    fadeout->m_excludedFromCapture = window->m_ruleApplicator->noScreenShare().valueOrDefault();
 
     static auto PDIMAROUND = CConfigValue<Config::FLOAT>("decoration:dim_around");
     if (*PDIMAROUND && window->m_ruleApplicator->dimAround().valueOrDefault())

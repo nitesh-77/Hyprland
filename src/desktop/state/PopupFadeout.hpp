@@ -5,7 +5,7 @@
 namespace Desktop {
     class CPopupFadeout final : public IFadeout {
       public:
-        static SP<CPopupFadeout>      create(SP<View::CPopup> popup, SP<Render::IFramebuffer> snapshot, float sourceAlpha);
+        static SP<CPopupFadeout>      create(SP<View::CPopup> popup, SP<Render::IFramebuffer> snapshot, float sourceAlpha, bool excludedFromCapture);
 
         virtual PHLMONITORREF         monitor() const override;
         virtual eFadeoutPlane         plane() const override;

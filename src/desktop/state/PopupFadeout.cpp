@@ -32,7 +32,7 @@ static void damageWeakFadeout(WP<T> fadeout) {
         damageFadeoutMonitor(FADEOUT->monitor());
 }
 
-SP<CPopupFadeout> CPopupFadeout::create(SP<CPopup> popup, SP<Render::IFramebuffer> snapshot, float sourceAlpha) {
+SP<CPopupFadeout> CPopupFadeout::create(SP<CPopup> popup, SP<Render::IFramebuffer> snapshot, float sourceAlpha, bool excludedFromCapture) {
     if (!popup || !snapshot)
         return nullptr;
 
@@ -43,6 +43,7 @@ SP<CPopupFadeout> CPopupFadeout::create(SP<CPopup> popup, SP<Render::IFramebuffe
     auto fadeout           = SP<CPopupFadeout>(new CPopupFadeout());
     fadeout->m_monitor     = MONITOR;
     fadeout->m_framebuffer = snapshot;
+    fadeout->m_excludedFromCapture = excludedFromCapture;
 
     static CConfigValue PBLURIGNOREA = CConfigValue<Config::FLOAT>("decoration:blur:popups_ignorealpha");
     if (shouldBlurPopup()) {
