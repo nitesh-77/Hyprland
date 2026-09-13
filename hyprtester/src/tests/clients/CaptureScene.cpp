@@ -414,6 +414,92 @@ TEST_CASE(captureExclusionCursorVisibleOnExclusionPath) {
     EXPECT(PLAIN_PIXEL.a, 255);
 }
 
+TEST_CASE(captureExclusionFadeOutNoLeak) {
+    // Fade-out gap found during live hardware testing of this branch (see CONTEXT.md /
+    // spec-true-capture-exclusion.md's testing notes): closing a no_screen_share window
+    // leaks its last rendered frame into the capture during its closing fade-out animation.
+    //
+    // Root cause: Window.cpp's onUnmap() snapshots the window into a CWindowFadeout, which
+    // deliberately does NOT keep a reference back to the window (the window may be destroyed
+    // while the fadeout is still animating) - so by the time renderFadeouts() draws that
+    // fadeout's texture, there was no way to re-check noScreenShare(). CWindowFadeout now
+    // captures the flag once at creation (m_excludedFromCapture on the IFadeout base), and
+    // renderFadeouts() skips drawing a fadeout's texture when the capture-exclusion pass is
+    // active and that fadeout was excluded - the same shouldExcludeFromCapture() helper
+    // renderMonitor()'s live-window path already uses.
+    //
+    // This is closely related to the historical upstream bug fixed in commit bca96a5
+    // ("protocols: Fix fading out windows with noscreenshare being visible", #11457) against
+    // the OLD black-box code (Screencopy.cpp's renderMon()) - same user-visible symptom
+    // (fading windows leak through), different code path (the new true-exclusion render
+    // added by ticket #4 didn't exist when that fix landed, so it never inherited the fix).
+    //
+    // This test is NOT parameterized on HYPRLAND_DISABLE_CAPTURE_EXCLUSION: the kill-switch's
+    // restored black-box path already carries the historical fix forward correctly (see
+    // ScreenshareFrame.cpp's renderMonitorBlackBox(), which skips only when truly at zero
+    // alpha and not fading, matching bca96a5's fix) - this test is specifically about the
+    // true-exclusion path's own, separate copy of this gap.
+    CCaptureSceneClient bottom;
+    if (!bottom.ok())
+        FAIL_TEST("Couldn't start the bottom capture-scene client");
+
+    EXPECT(bottom.setColor(0, 255, 0), true);
+    EXPECT(getFromSocket(std::format("/dispatch hl.dsp.window.float({{ action = 'set', window = 'pid:{}' }})", bottom.pid())), std::string{"ok"});
+    EXPECT(getFromSocket(std::format("/dispatch hl.dsp.window.resize({{ x = 400, y = 300, window = 'pid:{}' }})", bottom.pid())), std::string{"ok"});
+    EXPECT(getFromSocket(std::format("/dispatch hl.dsp.window.move({{ x = 100, y = 100, window = 'pid:{}' }})", bottom.pid())), std::string{"ok"});
+
+    // Top window: flagged no_screen_share, blue - same scene shape as captureExclusionTrueExclusion,
+    // so a leak during the fade would visibly produce blue (or a blend towards it) instead of
+    // the bottom window's green.
+    CCaptureSceneClient top;
+    if (!top.ok())
+        FAIL_TEST("Couldn't start the top capture-scene client");
+
+    EXPECT(top.setColor(0, 0, 255), true);
+    EXPECT(getFromSocket(std::format("/dispatch hl.dsp.window.float({{ action = 'set', window = 'pid:{}' }})", top.pid())), std::string{"ok"});
+    EXPECT(getFromSocket(std::format("/dispatch hl.dsp.window.resize({{ x = 400, y = 300, window = 'pid:{}' }})", top.pid())), std::string{"ok"});
+    EXPECT(getFromSocket(std::format("/dispatch hl.dsp.window.move({{ x = 100, y = 100, window = 'pid:{}' }})", top.pid())), std::string{"ok"});
+
+    {
+        auto clients = getFromSocket("/clients");
+        EXPECT_COUNT_STRING(clients, "at: 100,100", 2);
+        EXPECT_COUNT_STRING(clients, "size: 400,300", 2);
+    }
+
+    EXPECT(getFromSocket(std::format("/dispatch hl.dsp.window.set_prop({{ window = 'pid:{}', prop = 'no_screen_share', value = '1' }})", top.pid())), std::string{"ok"});
+    EXPECT(getFromSocket(std::format("/dispatch hl.dsp.focus({{ window = 'pid:{}' }})", top.pid())), std::string{"ok"});
+    Tests::sync();
+
+    // Close the flagged top window - this triggers Window.cpp's onUnmap(), which snapshots
+    // the window and hands it to CWindowFadeout::create() while fadeOut (speed 1.46,
+    // test.lua) plays out. The client process itself may exit as part of this; that's fine,
+    // the capture below only cares about the compositor's fadeout state, not the client.
+    EXPECT(getFromSocket(std::format("/dispatch hl.dsp.window.close({{ window = 'pid:{}' }})", top.pid())), std::string{"ok"});
+
+    // Capture immediately, before the fade has had time to finish - deliberately NOT calling
+    // Tests::sync() first (that would let the compositor settle onto a later, possibly
+    // fully-faded frame). The bottom capture-scene client is still alive and unaffected by
+    // the top window's close, so its capture request still reaches a live wl_shm buffer.
+    auto result = bottom.capture(/*overlayCursor=*/false, {{200, 150}});
+    if (!result)
+        FAIL_TEST("Capture failed or timed out");
+
+    if (result->size() != 1)
+        FAIL_TEST("Expected exactly one captured pixel, got {}", result->size());
+
+    const auto& PIXEL = result->at(0);
+
+    // Must be the bottom window's green underneath, not any blend towards the flagged
+    // window's blue (0,0,255) - a leak would show up as a nonzero blue component here,
+    // since the fadeout's alpha is still > 0 at capture time.
+    if (PIXEL.b != 0)
+        MARK_TEST_FAILED("Flagged window's fade-out leaked into the capture: got ({}, {}, {}, {}), expected no blue component", PIXEL.r, PIXEL.g, PIXEL.b, PIXEL.a);
+    else
+        LOG_OK("No leak during fade-out: got ({}, {}, {}, {})", PIXEL.r, PIXEL.g, PIXEL.b, PIXEL.a);
+
+    EXPECT(PIXEL.g, 255);
+}
+
 TEST_CASE(captureExclusionCursorVisible) {
     // Cursor-visibility check for ticket #4: confirm the cursor is still visible in the
     // capture, at a point away from any no_screen_share surface. This scene has no flagged

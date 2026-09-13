@@ -3259,6 +3259,11 @@ void IHyprRenderer::renderFadeouts(PHLMONITOR monitor, Desktop::eFadeoutPlane pl
 
     CRegion fakeDamage{0, 0, monitor->m_transformedSize.x, monitor->m_transformedSize.y};
     for (auto const& fadeout : fadeouts) {
+        // Mirrors shouldExcludeFromCapture(): a fadeout whose originating window/layer/popup had
+        // noScreenShare set must not leak its last frame during the capture-exclusion pass.
+        if (Render::shouldExcludeFromCapture(m_bCaptureExclusionPass, fadeout->excludedFromCapture()))
+            continue;
+
         const auto FB = fadeout->framebuffer();
         if (!FB || !FB->getTexture())
             continue;

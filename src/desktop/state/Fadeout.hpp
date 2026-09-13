@@ -59,11 +59,18 @@ namespace Desktop {
         virtual bool                  done() const      = 0;
         virtual SFadeoutRenderEffects effects() const;
 
+        // Whether the surface this fadeout was created from had noScreenShare set at the time
+        // it started fading out. Captured once at creation, since fadeouts deliberately don't
+        // keep a reference back to their originating window/layer/popup (which may be destroyed
+        // while the fadeout is still animating).
+        bool excludedFromCapture() const;
+
       protected:
         IFadeout() = default;
 
         SP<Render::IFramebuffer> m_framebuffer;
         PHLWORKSPACEREF          m_workspace;
         SFadeoutRenderEffects    m_effects;
+        bool                     m_excludedFromCapture = false;
     };
 }

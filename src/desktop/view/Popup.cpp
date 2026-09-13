@@ -10,6 +10,7 @@
 #include "../../managers/SeatManager.hpp"
 #include "../../animation/AnimationManager.hpp"
 #include "LayerSurface.hpp"
+#include "Window.hpp"
 #include "../../managers/input/InputManager.hpp"
 #include "../../managers/eventLoop/EventLoopManager.hpp"
 #include "../../render/Renderer.hpp"
@@ -275,7 +276,16 @@ void CPopup::onUnmap() {
     m_alpha.get(POPUP_ALPHA_FADE)->setValueAndWarp(1.F);
     *m_alpha.get(POPUP_ALPHA_FADE) = 0.F;
 
-    Desktop::fadingOutState()->add(CPopupFadeout::create(m_self.lock(), SNAPSHOT, SOURCEALPHA));
+    // A popup is owned by either a window or a layer, never both. Capture noScreenShare now:
+    // this fadeout may outlive both the popup and its owner, so the flag can't be re-checked
+    // later during renderFadeouts().
+    bool excludedFromCapture = false;
+    if (const auto WINDOWOWNER = m_windowOwner.lock(); WINDOWOWNER)
+        excludedFromCapture = WINDOWOWNER->m_ruleApplicator->noScreenShare().valueOrDefault();
+    else if (const auto LAYEROWNER = m_layerOwner.lock(); LAYEROWNER)
+        excludedFromCapture = LAYEROWNER->m_ruleApplicator->noScreenShare().valueOrDefault();
+
+    Desktop::fadingOutState()->add(CPopupFadeout::create(m_self.lock(), SNAPSHOT, SOURCEALPHA, excludedFromCapture));
 
     m_mapped = false;
 
