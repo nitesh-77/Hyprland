@@ -11,6 +11,8 @@
 
 #include "../../desktop/InputPolicyCapture.hpp"
 #include "../../desktop/view/WLSurface.hpp"
+#include "../../desktop/view/Popup.hpp"
+#include "../../desktop/view/Subsurface.hpp"
 #include "../../desktop/state/FocusState.hpp"
 #include "../../desktop/state/WindowState.hpp"
 #include "../../protocols/CursorShape.hpp"
@@ -82,7 +84,7 @@ CInputManager::CInputManager() {
         if (!cursorImageUnlocked())
             return;
 
-        g_pHyprRenderer->setCursorFromName(m_cursorSurfaceInfo.name);
+        restoreCursorIconToApp();
     });
 
     m_listeners.newIdleInhibitor = PROTO::idleInhibit->m_events.newIdleInhibitor.listen([this](const auto& data) { newIdleInhibitor(data); });
@@ -98,6 +100,20 @@ CInputManager::CInputManager() {
     });
 
     m_listeners.setCursor = g_pSeatManager->m_events.setCursor.listen([this](const auto& event) { processMouseRequest(event); });
+
+    m_listeners.pointerFocusChange = g_pSeatManager->m_events.pointerFocusChange.listen([this] {
+        if (m_cursorImageOverridden)
+            return;
+
+        if (isPointerFocusedOnCaptureExcludedWindow()) {
+            m_captureSafeCursorActive = true;
+            g_pHyprRenderer->setCursorFromName("left_ptr");
+        } else if (m_captureSafeCursorActive) {
+            // The next client may not send a cursor immediately after pointer enter.
+            m_captureSafeCursorActive = false;
+            g_pHyprRenderer->setCursorFromName("left_ptr");
+        }
+    });
 
     m_listeners.overrideChanged = Pointer::Cursor::overrideController->m_events.overrideChanged.listen([this](const std::string& shape) {
         if (shape.empty()) {
@@ -851,10 +867,20 @@ void CInputManager::processMouseRequest(const CSeatManager::SSetCursorEvent& eve
     if (!cursorImageUnlocked())
         return;
 
-    g_pHyprRenderer->setCursorSurface(m_cursorSurfaceInfo.wlSurface, event.hotspot.x, event.hotspot.y);
+    restoreCursorIconToApp();
 }
 
 void CInputManager::restoreCursorIconToApp() {
+    // The pointer is composited into captures even when its focused window is excluded.
+    // Keep the local pointer usable without revealing the client's hover shape in a share.
+    if (isPointerFocusedOnCaptureExcludedWindow()) {
+        m_captureSafeCursorActive = true;
+        g_pHyprRenderer->setCursorFromName("left_ptr");
+        return;
+    }
+
+    m_captureSafeCursorActive = false;
+
     if (m_cursorSurfaceInfo.hidden) {
         g_pHyprRenderer->setCursorSurface(nullptr, 0, 0);
         return;
@@ -865,6 +891,23 @@ void CInputManager::restoreCursorIconToApp() {
             g_pHyprRenderer->setCursorSurface(m_cursorSurfaceInfo.wlSurface, m_cursorSurfaceInfo.vHotspot.x, m_cursorSurfaceInfo.vHotspot.y);
     } else
         g_pHyprRenderer->setCursorFromName(m_cursorSurfaceInfo.name);
+}
+
+bool CInputManager::isPointerFocusedOnCaptureExcludedWindow() const {
+    const auto FOCUS   = g_pSeatManager->m_state.pointerFocus.lock();
+    const auto SURFACE = Desktop::View::CWLSurface::fromResource(FOCUS);
+    auto       view    = SURFACE ? SURFACE->view() : nullptr;
+
+    if (const auto SUBSURFACE = Desktop::View::CSubsurface::fromView(view)) {
+        const auto OWNER = SUBSURFACE->getT1Owner();
+        view             = OWNER ? OWNER->view() : nullptr;
+    } else if (const auto POPUP = Desktop::View::CPopup::fromView(view)) {
+        const auto OWNER = POPUP->getT1Owner();
+        view             = OWNER ? OWNER->view() : nullptr;
+    }
+
+    const auto WINDOW = Desktop::View::CWindow::fromView(view);
+    return WINDOW && WINDOW->m_ruleApplicator && WINDOW->m_ruleApplicator->noScreenShare().valueOrDefault();
 }
 
 bool CInputManager::cursorImageUnlocked() {

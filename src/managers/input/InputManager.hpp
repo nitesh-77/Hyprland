@@ -225,11 +225,13 @@ class CInputManager {
         CHyprSignalListener newVirtualKeyboard;
         CHyprSignalListener newVirtualMouse;
         CHyprSignalListener setCursor;
+        CHyprSignalListener pointerFocusChange;
         CHyprSignalListener overrideChanged;
     } m_listeners;
 
-    bool                 m_cursorImageOverridden = false;
-    eBorderIconDirection m_borderIconDirection   = BORDERICON_NONE;
+    bool                 m_cursorImageOverridden   = false;
+    bool                 m_captureSafeCursorActive = false;
+    eBorderIconDirection m_borderIconDirection     = BORDERICON_NONE;
 
     // for click behavior override
     eClickBehaviorMode m_clickBehavior        = CLICKMODE_DEFAULT;
@@ -297,6 +299,7 @@ class CInputManager {
     } m_cursorSurfaceInfo;
 
     void restoreCursorIconToApp(); // no-op if restored
+    bool isPointerFocusedOnCaptureExcludedWindow() const;
 
     // discrete scrolling emulation using v120 data
     struct {

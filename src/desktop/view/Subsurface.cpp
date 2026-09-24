@@ -1,6 +1,7 @@
 #include "Subsurface.hpp"
 #include "../state/FocusState.hpp"
 #include "Window.hpp"
+#include "Popup.hpp"
 #include "../../config/ConfigValue.hpp"
 #include "../../protocols/core/Compositor.hpp"
 #include "../../protocols/core/Subcompositor.hpp"
@@ -68,6 +69,14 @@ SP<CSubsurface> CSubsurface::fromView(SP<IView> v) {
 
 CSubsurface::CSubsurface() : IView(CWLSurface::create()) {
     ;
+}
+
+SP<CWLSurface> CSubsurface::getT1Owner() const {
+    if (m_windowParent)
+        return m_windowParent->wlSurface();
+    if (m_popupParent)
+        return m_popupParent->getT1Owner();
+    return nullptr;
 }
 
 eViewType CSubsurface::type() const {
