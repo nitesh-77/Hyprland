@@ -3,6 +3,7 @@
 #include "../DesktopTypes.hpp"
 #include "../../helpers/math/Math.hpp"
 
+#include <functional>
 #include <vector>
 
 class CWLSurfaceResource;
@@ -20,7 +21,9 @@ namespace Desktop {
         CViewHitTester(CViewHitTester&&)      = delete;
 
         PHLWINDOW              windowAt(const Vector2D& pos, uint16_t properties, PHLWINDOW ignoreWindow = nullptr) const;
+        PHLWINDOW              windowAtForInput(const Vector2D& pos, uint16_t properties, PHLWINDOW ignoreWindow = nullptr) const;
         SP<CWLSurfaceResource> windowSurfaceAt(const Vector2D& pos, PHLWINDOW window, Vector2D& surfaceLocal) const;
+        SP<CWLSurfaceResource> inputSurfaceAt(const Vector2D& pos, PHLWINDOW window, Vector2D& surfaceLocal) const;
         Vector2D               surfaceLocalAt(const Vector2D& pos, PHLWINDOW window, SP<CWLSurfaceResource> surface) const;
         SP<CWLSurfaceResource> layerPopupSurfaceAt(const Vector2D& pos, PHLMONITOR monitor, Vector2D* surfaceCoords, PHLLS* layerFound) const;
         SP<CWLSurfaceResource> layerPopupSurfaceAt(const Vector2D& pos, const std::vector<PHLLSREF>* layerSurfaces, Vector2D* surfaceCoords, PHLLS* layerFound) const;
@@ -28,6 +31,7 @@ namespace Desktop {
                                               bool aboveLockscreen = false) const;
 
       private:
+        PHLWINDOW                windowAt(const Vector2D& pos, uint16_t properties, PHLWINDOW ignoreWindow, const std::function<bool(PHLWINDOW)>& acceptWindow) const;
         const IViewStateTracker& m_tracker;
     };
 }

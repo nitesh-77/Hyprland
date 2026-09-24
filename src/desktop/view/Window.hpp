@@ -6,6 +6,7 @@
 #include <unordered_map>
 
 #include "View.hpp"
+#include "../InputPolicy.hpp"
 #include "../../config/shared/complex/ComplexDataTypes.hpp"
 #include "../../helpers/AnimatedVariable.hpp"
 #include "../../helpers/TagKeeper.hpp"
@@ -343,6 +344,9 @@ namespace Desktop::View {
          */
         bool                              hasInputBlockedReasonsBesides(std::underlying_type_t<eWindowInputBlockReason> reason) const;
         bool                              acceptsInput() const;
+        const CInputPolicy&               inputPolicy() const;
+        std::expected<void, std::string>  setInputPolicy(std::string_view serialized);
+        void                              clearInputPolicy();
         bool                              isAllowedOverFullscreen() const;
         bool                              isBlockedByFullscreen() const;
         bool                              isFadingOutUnderFullscreen() const;
@@ -476,6 +480,7 @@ namespace Desktop::View {
         bool                                                                             m_suspended         = false;
         WORKSPACEID                                                                      m_lastWorkspace     = WORKSPACE_INVALID;
         uint32_t                                                                         m_inputBlockReasons = INPUT_BLOCK_NONE;
+        CInputPolicy                                                                     m_inputPolicy;
         Desktop::Types::CMultiAVarContainer<float, std::underlying_type_t<eWindowAlpha>> m_alpha;
     };
 

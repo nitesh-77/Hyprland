@@ -948,6 +948,33 @@ bool CWindow::acceptsInput() const {
     return !isHidden() && !isInputBlocked();
 }
 
+const CInputPolicy& CWindow::inputPolicy() const {
+    return m_inputPolicy;
+}
+
+std::expected<void, std::string> CWindow::setInputPolicy(std::string_view serialized) {
+    if (m_isX11)
+        return std::unexpected("input policies are only supported for Wayland toplevels");
+
+    const auto resource = m_wlSurface ? m_wlSurface->resource() : nullptr;
+    const auto size     = resource ? resource->m_current.size : Vector2D{};
+    auto       result   = m_inputPolicy.setSerialized(serialized, size);
+    if (!result)
+        return result;
+
+    if (g_pInputManager && g_pCompositor && !g_pCompositor->m_isShuttingDown)
+        g_pInputManager->refocus();
+
+    return result;
+}
+
+void CWindow::clearInputPolicy() {
+    m_inputPolicy.clear();
+
+    if (g_pInputManager && g_pCompositor && !g_pCompositor->m_isShuttingDown)
+        g_pInputManager->refocus();
+}
+
 bool CWindow::isAllowedOverFullscreen() const {
 
     if (!m_workspace)
