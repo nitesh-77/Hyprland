@@ -6,6 +6,7 @@ using namespace Desktop;
 
 namespace {
     constexpr auto SURFACE_SIZE = Vector2D{800.0, 600.0};
+    constexpr auto CUE_WIRE     = "version=1;generation=42;viewport=800x600;regions=10,20,30,40;50,60,70,80";
 
     CRegion        fullSurfaceRegion() {
         return CBox{{}, SURFACE_SIZE};
@@ -25,36 +26,50 @@ TEST(InputPolicy, unsetPolicyLeavesClientRegionUnchanged) {
 
     EXPECT_FALSE(policy.hasPolicy());
     EXPECT_TRUE(policy.effectiveInputRegion(clientRegion, SURFACE_SIZE).containsPoint({400.0, 300.0}));
-    EXPECT_TRUE(policy.accepts(clientRegion, {400.0, 300.0}, SURFACE_SIZE));
+    EXPECT_TRUE(policy.acceptsPoint({400.0, 300.0}, clientRegion, {400.0, 300.0}, SURFACE_SIZE));
 }
 
 TEST(InputPolicy, emptyPolicyIsPresentAndBlocksAllInput) {
     CInputPolicy policy;
 
-    const auto   result = policy.setSerialized("version=1;viewport=800x600;regions=", SURFACE_SIZE);
+    const auto   result = policy.setSerialized("version=1;generation=1;viewport=800x600;regions=", SURFACE_SIZE);
 
     ASSERT_TRUE(result.has_value()) << result.error();
     EXPECT_TRUE(policy.hasPolicy());
     EXPECT_TRUE(policy.region().empty());
     EXPECT_TRUE(policy.effectiveInputRegion(fullSurfaceRegion(), SURFACE_SIZE).empty());
-    EXPECT_FALSE(policy.accepts(fullSurfaceRegion(), {400.0, 300.0}, SURFACE_SIZE));
+    EXPECT_FALSE(policy.acceptsPoint({400.0, 300.0}, fullSurfaceRegion(), {400.0, 300.0}, SURFACE_SIZE));
+}
+
+TEST(InputPolicy, exactCueWireFormatIsParsed) {
+    CInputPolicy policy;
+
+    const auto   result = policy.setSerialized(CUE_WIRE, SURFACE_SIZE);
+
+    ASSERT_TRUE(result.has_value()) << result.error();
+    ASSERT_TRUE(policy.snapshot().has_value());
+    EXPECT_EQ(policy.snapshot()->version, 1u);
+    EXPECT_EQ(policy.snapshot()->generation, 42u);
+    EXPECT_TRUE(policy.containsRootPoint({20.0, 30.0}));
+    EXPECT_TRUE(policy.containsRootPoint({60.0, 70.0}));
+    EXPECT_FALSE(policy.containsRootPoint({40.0, 30.0}));
 }
 
 TEST(InputPolicy, rectanglesFormAUnionAndPreserveGaps) {
     CInputPolicy policy;
 
-    const auto   result = policy.setSerialized("version=7;viewport=800x600;regions=0,0,100,100;200,0,100,100", SURFACE_SIZE);
+    const auto   result = policy.setSerialized("version=1;generation=7;viewport=800x600;regions=0,0,100,100;200,0,100,100", SURFACE_SIZE);
 
     ASSERT_TRUE(result.has_value()) << result.error();
-    EXPECT_TRUE(policy.containsSurfacePoint({50.0, 50.0}));
-    EXPECT_TRUE(policy.containsSurfacePoint({250.0, 50.0}));
-    EXPECT_FALSE(policy.containsSurfacePoint({150.0, 50.0}));
+    EXPECT_TRUE(policy.containsRootPoint({50.0, 50.0}));
+    EXPECT_TRUE(policy.containsRootPoint({250.0, 50.0}));
+    EXPECT_FALSE(policy.containsRootPoint({150.0, 50.0}));
     EXPECT_EQ(policy.snapshot()->rectangles.size(), 2u);
 }
 
 TEST(InputPolicy, policyIntersectsInfiniteAndPartialClientRegions) {
     CInputPolicy policy;
-    ASSERT_TRUE(policy.setSerialized("version=3;viewport=800x600;regions=100,100,200,200", SURFACE_SIZE).has_value());
+    ASSERT_TRUE(policy.setSerialized("version=1;generation=3;viewport=800x600;regions=100,100,200,200", SURFACE_SIZE).has_value());
 
     // An infinite wl_surface input region is materialized as the full surface.
     const auto effectiveFull = policy.effectiveInputRegion(fullSurfaceRegion(), SURFACE_SIZE);
@@ -67,38 +82,68 @@ TEST(InputPolicy, policyIntersectsInfiniteAndPartialClientRegions) {
     EXPECT_FALSE(effectivePartial.containsPoint({550.0, 450.0}));
 }
 
+TEST(InputPolicy, acceptsPointKeepsRootAndSurfaceCoordinatesSeparate) {
+    CInputPolicy policy;
+    ASSERT_TRUE(policy.setSerialized("version=1;generation=4;viewport=800x600;regions=200,200,100,100", SURFACE_SIZE).has_value());
+
+    CRegion surfaceLocalClientRegion;
+    surfaceLocalClientRegion.add(CBox{0.0, 0.0, 50.0, 50.0});
+
+    EXPECT_TRUE(policy.acceptsPoint({250.0, 250.0}, surfaceLocalClientRegion, {25.0, 25.0}, {100.0, 100.0}));
+    EXPECT_FALSE(policy.acceptsPoint({250.0, 250.0}, surfaceLocalClientRegion, {75.0, 25.0}, {100.0, 100.0}));
+    EXPECT_FALSE(policy.acceptsPoint({100.0, 100.0}, surfaceLocalClientRegion, {25.0, 25.0}, {100.0, 100.0}));
+}
+
 TEST(InputPolicy, emptyClientRegionRemainsEmptyAfterIntersection) {
     CInputPolicy policy;
-    ASSERT_TRUE(policy.setSerialized("version=3;viewport=800x600;regions=0,0,800,600", SURFACE_SIZE).has_value());
+    ASSERT_TRUE(policy.setSerialized("version=1;generation=3;viewport=800x600;regions=0,0,800,600", SURFACE_SIZE).has_value());
 
     const CRegion emptyClientRegion;
     EXPECT_TRUE(policy.effectiveInputRegion(emptyClientRegion, SURFACE_SIZE).empty());
-    EXPECT_FALSE(policy.accepts(emptyClientRegion, {10.0, 10.0}, SURFACE_SIZE));
+    EXPECT_FALSE(policy.acceptsPoint({10.0, 10.0}, emptyClientRegion, {10.0, 10.0}, SURFACE_SIZE));
 }
 
 TEST(InputPolicy, invalidReplacementDoesNotReplaceLastValidPolicy) {
     CInputPolicy policy;
-    ASSERT_TRUE(policy.setSerialized("version=4;viewport=800x600;regions=10,10,100,100", SURFACE_SIZE).has_value());
+    ASSERT_TRUE(policy.setSerialized("version=1;generation=4;viewport=800x600;regions=10,10,100,100", SURFACE_SIZE).has_value());
 
-    EXPECT_FALSE(policy.setSerialized("version=5;viewport=801x600;regions=0,0,10,10", SURFACE_SIZE).has_value());
-    EXPECT_EQ(policy.snapshot()->version, 4u);
-    EXPECT_TRUE(policy.containsSurfacePoint({20.0, 20.0}));
-    EXPECT_FALSE(policy.containsSurfacePoint({5.0, 5.0}));
+    EXPECT_FALSE(policy.setSerialized("version=1;generation=5;viewport=801x600;regions=0,0,10,10", SURFACE_SIZE).has_value());
+    EXPECT_EQ(policy.snapshot()->generation, 4u);
+    EXPECT_TRUE(policy.containsRootPoint({20.0, 20.0}));
+    EXPECT_FALSE(policy.containsRootPoint({5.0, 5.0}));
     EXPECT_TRUE(policy.viewportMatches(SURFACE_SIZE));
     EXPECT_FALSE(policy.viewportMatches({801.0, 600.0}));
 
-    EXPECT_FALSE(policy.setSerialized("version=5;viewport=800x600;regions=0,0,0,10", SURFACE_SIZE).has_value());
-    EXPECT_EQ(policy.snapshot()->version, 4u);
-    EXPECT_TRUE(policy.containsSurfacePoint({20.0, 20.0}));
+    EXPECT_FALSE(policy.setSerialized("version=1;generation=5;viewport=800x600;regions=0,0,0,10", SURFACE_SIZE).has_value());
+    EXPECT_EQ(policy.snapshot()->generation, 4u);
+    EXPECT_TRUE(policy.containsRootPoint({20.0, 20.0}));
 
-    EXPECT_FALSE(policy.setSerialized("version=3;viewport=800x600;regions=0,0,10,10", SURFACE_SIZE).has_value());
-    EXPECT_EQ(policy.snapshot()->version, 4u);
+    EXPECT_TRUE(policy.setSerialized("version=1;generation=5;viewport=800x600;regions=0,0,10,10", SURFACE_SIZE).has_value());
+    EXPECT_EQ(policy.snapshot()->generation, 5u);
+
+    EXPECT_FALSE(policy.setSerialized("version=1;generation=3;viewport=800x600;regions=0,0,10,10", SURFACE_SIZE).has_value());
+    EXPECT_EQ(policy.snapshot()->generation, 5u);
+}
+
+TEST(InputPolicy, clearKeepsGenerationFloor) {
+    CInputPolicy policy;
+    ASSERT_TRUE(policy.setSerialized("version=1;generation=10;viewport=800x600;regions=0,0,10,10", SURFACE_SIZE).has_value());
+
+    policy.clear();
+
+    EXPECT_FALSE(policy.hasPolicy());
+    EXPECT_EQ(policy.generationFloor(), 10u);
+    EXPECT_FALSE(policy.setSerialized("version=1;generation=10;viewport=800x600;regions=0,0,20,20", SURFACE_SIZE).has_value());
+    EXPECT_TRUE(policy.setSerialized("version=1;generation=11;viewport=800x600;regions=0,0,20,20", SURFACE_SIZE).has_value());
+    EXPECT_TRUE(policy.hasPolicy());
 }
 
 TEST(InputPolicy, malformedAndOversizedSnapshotsAreRejected) {
     CInputPolicy policy;
 
-    EXPECT_FALSE(policy.setSerialized("version=1;viewport=800x600;regions=0,0,10", SURFACE_SIZE).has_value());
+    EXPECT_FALSE(policy.setSerialized("version=1;generation=1;viewport=800x600;regions=0,0,10", SURFACE_SIZE).has_value());
+    EXPECT_FALSE(policy.setSerialized("version=2;generation=1;viewport=800x600;regions=0,0,10,10", SURFACE_SIZE).has_value());
+    EXPECT_FALSE(policy.setSerialized("version=1;generation=0;viewport=800x600;regions=0,0,10,10", SURFACE_SIZE).has_value());
     EXPECT_FALSE(policy.hasPolicy());
 
     const std::string oversized(CInputPolicy::MAX_SERIALIZED_SIZE + 1, 'x');
@@ -108,7 +153,7 @@ TEST(InputPolicy, malformedAndOversizedSnapshotsAreRejected) {
 
 TEST(InputPolicy, clearRestoresUnsetBehavior) {
     CInputPolicy policy;
-    ASSERT_TRUE(policy.setSerialized("version=1;viewport=800x600;regions=0,0,10,10", SURFACE_SIZE).has_value());
+    ASSERT_TRUE(policy.setSerialized("version=1;generation=1;viewport=800x600;regions=0,0,10,10", SURFACE_SIZE).has_value());
     ASSERT_TRUE(policy.hasPolicy());
 
     policy.clear();

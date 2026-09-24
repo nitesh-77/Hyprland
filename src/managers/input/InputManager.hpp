@@ -122,6 +122,7 @@ class CInputManager {
 
     Vector2D           getMouseCoordsInternal();
     void               refocus(std::optional<Vector2D> overridePos = std::nullopt);
+    void               refocusForInputPolicy();
     bool               refocusLastWindow(PHLMONITOR pMonitor);
     void               simulateMouseMovement();
     void               sendMotionEventsToFocused();
@@ -246,12 +247,12 @@ class CInputManager {
 
     uint32_t           m_capabilities = 0;
 
-    void               mouseMoveUnified(uint32_t, bool refocus = false, bool mouse = false, std::optional<Vector2D> overridePos = std::nullopt);
-    void               recheckMouseWarpOnMouseInput();
+    void            mouseMoveUnified(uint32_t, bool refocus = false, bool mouse = false, std::optional<Vector2D> overridePos = std::nullopt, bool forceInputPolicyRefocus = false);
+    void            recheckMouseWarpOnMouseInput();
 
-    SP<CTabletTool>    ensureTabletToolPresent(SP<Aquamarine::ITabletTool>);
+    SP<CTabletTool> ensureTabletToolPresent(SP<Aquamarine::ITabletTool>);
 
-    void               applyConfigToKeyboard(SP<IKeyboard>);
+    void            applyConfigToKeyboard(SP<IKeyboard>);
 
     // this will be set after a refocus()
     WP<CWLSurfaceResource> m_foundSurfaceToFocus;

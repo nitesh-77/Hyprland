@@ -963,16 +963,19 @@ std::expected<void, std::string> CWindow::setInputPolicy(std::string_view serial
         return result;
 
     if (g_pInputManager && g_pCompositor && !g_pCompositor->m_isShuttingDown)
-        g_pInputManager->refocus();
+        g_pInputManager->refocusForInputPolicy();
 
     return result;
 }
 
 void CWindow::clearInputPolicy() {
+    if (m_isX11)
+        return;
+
     m_inputPolicy.clear();
 
     if (g_pInputManager && g_pCompositor && !g_pCompositor->m_isShuttingDown)
-        g_pInputManager->refocus();
+        g_pInputManager->refocusForInputPolicy();
 }
 
 bool CWindow::isAllowedOverFullscreen() const {

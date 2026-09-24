@@ -147,18 +147,19 @@ PHLWINDOW CViewHitTester::windowAt(const Vector2D& pos, uint16_t properties, PHL
         const auto        PWORKSPACE = State::workspaceState()->query().id(WSPID).run();
 
         if (Fullscreen::controller()->hasFullscreen(PWORKSPACE) && !(properties & SKIP_FULLSCREEN_PRIORITY) && !ONLY_PRIORITY) {
-            const auto FS_WINDOW = Fullscreen::controller()->getFullscreenWindow(PWORKSPACE);
+            auto FS_WINDOW = Fullscreen::controller()->getFullscreenWindow(PWORKSPACE);
 
             if (!FS_WINDOW)
                 return nullptr;
 
-            if (!acceptWindow || FS_WINDOW != ignoreWindow) {
-                // for maximized windows, don't return a window if we are not directly on it.
+            const bool SKIP_IGNORED = acceptWindow && FS_WINDOW == ignoreWindow;
+            if (!SKIP_IGNORED) {
                 if (!Fullscreen::controller()->isFullscreen(FS_WINDOW, Fullscreen::FSMODE_MAXIMIZED) || FS_WINDOW->getWindowBoxUnified(properties).containsPoint(pos)) {
                     if (accepts(FS_WINDOW))
                         return FS_WINDOW;
-                } else if (!acceptWindow)
+                } else {
                     return nullptr;
+                }
             }
         }
 
@@ -284,7 +285,7 @@ SP<CWLSurfaceResource> CViewHitTester::inputSurfaceAt(const Vector2D& pos, PHLWI
     if (!validMapped(window) || window->m_isX11)
         return nullptr;
 
-    const auto SURFACE = windowSurfaceAt(pos, window, surfaceLocal);
+    auto SURFACE = windowSurfaceAt(pos, window, surfaceLocal);
     if (!SURFACE)
         return nullptr;
 
@@ -296,12 +297,14 @@ SP<CWLSurfaceResource> CViewHitTester::inputSurfaceAt(const Vector2D& pos, PHLWI
     if (!POLICY.viewportMatches(ROOT_SURFACE->m_current.size))
         return nullptr;
 
-    const auto ROOT_LOCAL = pos - window->position(Desktop::View::IGeometric::GEOMETRIC_GOAL);
-    if (!POLICY.containsSurfacePoint(ROOT_LOCAL))
+    // Policy coordinates are root content-local; the client region and local point
+    // returned by windowSurfaceAt belong to the selected surface.
+    const auto ROOT_CONTENT_LOCAL = pos - window->position(Desktop::View::IGeometric::GEOMETRIC_GOAL);
+    if (!POLICY.containsRootPoint(ROOT_CONTENT_LOCAL))
         return nullptr;
 
     const auto CLIENT_REGION = SURFACE->m_current.effectiveInputRegion();
-    if (!POLICY.accepts(CLIENT_REGION, surfaceLocal, SURFACE->m_current.size))
+    if (!POLICY.acceptsPoint(ROOT_CONTENT_LOCAL, CLIENT_REGION, surfaceLocal, SURFACE->m_current.size))
         return nullptr;
 
     return SURFACE;

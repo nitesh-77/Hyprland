@@ -4,6 +4,7 @@
 #include <cctype>
 #include <charconv>
 #include <cmath>
+#include <format>
 #include <system_error>
 
 using namespace Desktop;
@@ -34,12 +35,9 @@ static std::vector<std::string_view> split(std::string_view value, char separato
     return result;
 }
 
-static std::expected<uint64_t, std::string> parseUnsigned(std::string_view value) {
-    if (!value.empty() && (value.front() == 'v' || value.front() == 'V'))
-        value.remove_prefix(1);
-
+static std::expected<uint64_t, std::string> parseUnsigned(std::string_view value, const char* fieldName) {
     if (value.empty())
-        return std::unexpected("version is empty");
+        return std::unexpected(std::format("{} is empty", fieldName));
 
     uint64_t    result = 0;
     const auto* begin  = value.data();
@@ -47,7 +45,7 @@ static std::expected<uint64_t, std::string> parseUnsigned(std::string_view value
     const auto  parsed = std::from_chars(begin, end, result, 10);
 
     if (parsed.ec != std::errc{} || parsed.ptr != end)
-        return std::unexpected("version must be an unsigned integer");
+        return std::unexpected(std::format("{} must be an unsigned integer", fieldName));
 
     return result;
 }
@@ -72,15 +70,15 @@ static std::expected<CBox, std::string> parseRectangle(std::string_view value) {
     if (VALUES.size() != 4)
         return std::unexpected("each rectangle must contain x,y,width,height");
 
-    std::array<double, 4> numbers;
+    std::array<double, 4> numbers{};
     for (size_t i = 0; i < VALUES.size(); ++i) {
-        auto number = parseNumber(trim(VALUES[i]));
+        auto number = parseNumber(trim(VALUES.at(i)));
         if (!number)
             return std::unexpected(number.error());
-        numbers[i] = *number;
+        numbers.at(i) = *number;
     }
 
-    return CBox{numbers[0], numbers[1], numbers[2], numbers[3]};
+    return CBox{numbers.at(0), numbers.at(1), numbers.at(2), numbers.at(3)};
 }
 
 static std::expected<SInputPolicySnapshot, std::string> parseSnapshot(std::string_view serialized) {
@@ -91,18 +89,30 @@ static std::expected<SInputPolicySnapshot, std::string> parseSnapshot(std::strin
         return std::unexpected("input policy snapshot is too large");
 
     const auto FIELDS = split(serialized, ';');
-    if (FIELDS.size() < 3)
-        return std::unexpected("input policy snapshot requires version, viewport, and regions");
+    if (FIELDS.size() < 4)
+        return std::unexpected("input policy snapshot requires version, generation, viewport, and regions");
 
-    const auto VERSION_FIELD = trim(FIELDS[0]);
+    const auto VERSION_FIELD = trim(FIELDS.at(0));
     if (!VERSION_FIELD.starts_with("version="))
         return std::unexpected("input policy snapshot is missing version");
 
-    auto version = parseUnsigned(trim(VERSION_FIELD.substr(VERSION_FIELD.find('=') + 1)));
+    auto version = parseUnsigned(trim(VERSION_FIELD.substr(VERSION_FIELD.find('=') + 1)), "version");
     if (!version)
         return std::unexpected(version.error());
+    if (*version != 1)
+        return std::unexpected("unsupported input policy schema version");
 
-    const auto VIEWPORT_FIELD = trim(FIELDS[1]);
+    const auto GENERATION_FIELD = trim(FIELDS.at(1));
+    if (!GENERATION_FIELD.starts_with("generation="))
+        return std::unexpected("input policy snapshot is missing generation");
+
+    auto generation = parseUnsigned(trim(GENERATION_FIELD.substr(GENERATION_FIELD.find('=') + 1)), "generation");
+    if (!generation)
+        return std::unexpected(generation.error());
+    if (*generation == 0)
+        return std::unexpected("input policy generation must be greater than zero");
+
+    const auto VIEWPORT_FIELD = trim(FIELDS.at(2));
     if (!VIEWPORT_FIELD.starts_with("viewport="))
         return std::unexpected("input policy snapshot is missing viewport");
 
@@ -111,30 +121,39 @@ static std::expected<SInputPolicySnapshot, std::string> parseSnapshot(std::strin
     if (VIEWPORT_PARTS.size() != 2)
         return std::unexpected("viewport must have the form width x height");
 
-    auto viewportWidth = parseNumber(trim(VIEWPORT_PARTS[0]));
+    auto viewportWidth = parseNumber(trim(VIEWPORT_PARTS.at(0)));
     if (!viewportWidth)
         return std::unexpected("viewport width must be a finite number");
-    auto viewportHeight = parseNumber(trim(VIEWPORT_PARTS[1]));
+    auto viewportHeight = parseNumber(trim(VIEWPORT_PARTS.at(1)));
     if (!viewportHeight)
         return std::unexpected("viewport height must be a finite number");
 
     SInputPolicySnapshot snapshot;
-    snapshot.version  = *version;
-    snapshot.viewport = CBox{0.0, 0.0, *viewportWidth, *viewportHeight};
+    snapshot.version    = 1;
+    snapshot.generation = *generation;
+    snapshot.viewport   = CBox{0.0, 0.0, *viewportWidth, *viewportHeight};
 
-    bool regionsSeen = false;
-    for (size_t i = 2; i < FIELDS.size(); ++i) {
-        auto field = trim(FIELDS[i]);
-        if (field.starts_with("regions=") || field.starts_with("rectangles=")) {
-            if (regionsSeen)
-                return std::unexpected("input policy snapshot contains duplicate regions");
+    const auto REGIONS_FIELD = trim(FIELDS.at(3));
+    if (!REGIONS_FIELD.starts_with("regions="))
+        return std::unexpected("input policy snapshot is missing regions");
 
-            regionsSeen = true;
-            field       = trim(field.substr(field.find('=') + 1));
-            if (field.empty())
-                continue;
-        } else if (!regionsSeen)
-            return std::unexpected("rectangles must follow the regions field");
+    auto firstRegion = trim(REGIONS_FIELD.substr(REGIONS_FIELD.find('=') + 1));
+    if (!firstRegion.empty()) {
+        if (snapshot.rectangles.size() >= CInputPolicy::MAX_RECTANGLES)
+            return std::unexpected("input policy snapshot contains too many rectangles");
+
+        auto rectangle = parseRectangle(firstRegion);
+        if (!rectangle)
+            return std::unexpected(rectangle.error());
+        snapshot.rectangles.emplace_back(*rectangle);
+    }
+
+    for (size_t i = 4; i < FIELDS.size(); ++i) {
+        const auto field = trim(FIELDS.at(i));
+        if (field.empty())
+            return std::unexpected("rectangle fields must not be empty");
+        if (field.contains('='))
+            return std::unexpected("unexpected field after regions");
 
         if (snapshot.rectangles.size() >= CInputPolicy::MAX_RECTANGLES)
             return std::unexpected("input policy snapshot contains too many rectangles");
@@ -145,14 +164,15 @@ static std::expected<SInputPolicySnapshot, std::string> parseSnapshot(std::strin
         snapshot.rectangles.emplace_back(*rectangle);
     }
 
-    if (!regionsSeen)
-        return std::unexpected("input policy snapshot is missing regions");
-
     return snapshot;
 }
 
 bool CInputPolicy::hasPolicy() const {
     return m_snapshot.has_value();
+}
+
+uint64_t CInputPolicy::generationFloor() const {
+    return m_generationFloor;
 }
 
 const std::optional<SInputPolicySnapshot>& CInputPolicy::snapshot() const {
@@ -163,46 +183,56 @@ CRegion CInputPolicy::region() const {
     return m_snapshot ? m_snapshot->region.copy() : CRegion{};
 }
 
-CRegion CInputPolicy::effectiveInputRegion(const CRegion& clientRegion, const Vector2D& surfaceSize) const {
+CRegion CInputPolicy::effectiveInputRegion(const CRegion& clientRegionInRootCoordinates, const Vector2D& rootSize) const {
     if (!m_snapshot)
-        return clientRegion;
+        return clientRegionInRootCoordinates;
 
-    auto effective = clientRegion.copy();
+    auto effective = clientRegionInRootCoordinates.copy();
     effective.intersect(m_snapshot->region);
-    if (surfaceSize.x > 0.0 && surfaceSize.y > 0.0)
-        effective.intersect(CBox{{}, surfaceSize});
+    if (rootSize.x > 0.0 && rootSize.y > 0.0)
+        effective.intersect(CBox{{}, rootSize});
     return effective;
 }
 
-bool CInputPolicy::accepts(const CRegion& clientRegion, const Vector2D& point, const Vector2D& surfaceSize) const {
-    return effectiveInputRegion(clientRegion, surfaceSize).containsPoint(point);
+bool CInputPolicy::acceptsPoint(const Vector2D& rootPoint, const CRegion& clientRegion, const Vector2D& surfaceLocalPoint, const Vector2D& surfaceSize) const {
+    auto effectiveClientRegion = clientRegion.copy();
+    if (surfaceSize.x > 0.0 && surfaceSize.y > 0.0)
+        effectiveClientRegion.intersect(CBox{{}, surfaceSize});
+
+    if (!effectiveClientRegion.containsPoint(surfaceLocalPoint))
+        return false;
+
+    return !m_snapshot || m_snapshot->region.containsPoint(rootPoint);
 }
 
-bool CInputPolicy::containsSurfacePoint(const Vector2D& point) const {
-    return !m_snapshot || m_snapshot->region.containsPoint(point);
+bool CInputPolicy::containsRootPoint(const Vector2D& rootPoint) const {
+    return !m_snapshot || m_snapshot->region.containsPoint(rootPoint);
 }
 
-bool CInputPolicy::viewportMatches(const Vector2D& surfaceSize) const {
+bool CInputPolicy::viewportMatches(const Vector2D& rootSize) const {
     if (!m_snapshot)
         return true;
 
-    return surfaceSize.x > 0.0 && surfaceSize.y > 0.0 && std::abs(m_snapshot->viewport.w - surfaceSize.x) <= EPSILON && std::abs(m_snapshot->viewport.h - surfaceSize.y) <= EPSILON;
+    return rootSize.x > 0.0 && rootSize.y > 0.0 && std::abs(m_snapshot->viewport.w - rootSize.x) <= EPSILON && std::abs(m_snapshot->viewport.h - rootSize.y) <= EPSILON;
 }
 
-std::expected<void, std::string> CInputPolicy::setSerialized(std::string_view serialized, const Vector2D& surfaceSize) {
+std::expected<void, std::string> CInputPolicy::setSerialized(std::string_view serialized, const Vector2D& rootSize) {
     auto snapshot = parseSnapshot(serialized);
     if (!snapshot)
         return std::unexpected(snapshot.error());
 
-    return setSnapshot(std::move(*snapshot), surfaceSize);
+    return setSnapshot(std::move(*snapshot), rootSize);
 }
 
-std::expected<void, std::string> CInputPolicy::setSnapshot(SInputPolicySnapshot snapshot, const Vector2D& surfaceSize) {
-    if (m_snapshot && snapshot.version <= m_snapshot->version)
-        return std::unexpected("input policy version is not newer than the current version");
+std::expected<void, std::string> CInputPolicy::setSnapshot(SInputPolicySnapshot snapshot, const Vector2D& rootSize) {
+    if (snapshot.version != 1)
+        return std::unexpected("unsupported input policy schema version");
 
-    if (snapshot.version == 0)
-        return std::unexpected("input policy version must be greater than zero");
+    if (snapshot.generation == 0)
+        return std::unexpected("input policy generation must be greater than zero");
+
+    if (snapshot.generation <= m_generationFloor)
+        return std::unexpected("input policy generation is not newer than the current generation");
 
     if (!std::isfinite(snapshot.viewport.x) || !std::isfinite(snapshot.viewport.y) || !std::isfinite(snapshot.viewport.w) || !std::isfinite(snapshot.viewport.h) ||
         snapshot.viewport.x != 0.0 || snapshot.viewport.y != 0.0 || snapshot.viewport.w <= 0.0 || snapshot.viewport.h <= 0.0 || snapshot.viewport.w > MAX_DIMENSION ||
@@ -212,9 +242,9 @@ std::expected<void, std::string> CInputPolicy::setSnapshot(SInputPolicySnapshot 
     if (snapshot.rectangles.size() > MAX_RECTANGLES)
         return std::unexpected("input policy snapshot contains too many rectangles");
 
-    if ((surfaceSize.x > 0.0 || surfaceSize.y > 0.0) &&
-        (!std::isfinite(surfaceSize.x) || !std::isfinite(surfaceSize.y) || surfaceSize.x <= 0.0 || surfaceSize.y <= 0.0 ||
-         std::abs(snapshot.viewport.w - surfaceSize.x) > EPSILON || std::abs(snapshot.viewport.h - surfaceSize.y) > EPSILON))
+    if ((rootSize.x > 0.0 || rootSize.y > 0.0) &&
+        (!std::isfinite(rootSize.x) || !std::isfinite(rootSize.y) || rootSize.x <= 0.0 || rootSize.y <= 0.0 || std::abs(snapshot.viewport.w - rootSize.x) > EPSILON ||
+         std::abs(snapshot.viewport.h - rootSize.y) > EPSILON))
         return std::unexpected("input policy viewport does not match the surface size");
 
     CRegion region;
@@ -226,8 +256,10 @@ std::expected<void, std::string> CInputPolicy::setSnapshot(SInputPolicySnapshot 
         region.add(rectangle);
     }
 
-    snapshot.region = std::move(region);
-    m_snapshot      = std::move(snapshot);
+    const auto GENERATION = snapshot.generation;
+    snapshot.region       = std::move(region);
+    m_snapshot            = std::move(snapshot);
+    m_generationFloor     = GENERATION;
     return {};
 }
 

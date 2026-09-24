@@ -227,7 +227,7 @@ void CInputManager::sendMotionEventsToFocused() {
     g_pSeatManager->setPointerFocus(Desktop::focusState()->surface(), getMouseCoordsInternal().floor() - BOX->pos());
 }
 
-void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, std::optional<Vector2D> overridePos) {
+void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, std::optional<Vector2D> overridePos, bool forceInputPolicyRefocus) {
     m_lastInputMouse = mouse;
 
     if (g_pCompositor->m_isShuttingDown)
@@ -426,10 +426,10 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
         }
     }
 
-    // if we are holding a pointer button,
-    // and we're not dnd-ing, don't refocus. Keep focus on last surface.
+    // If we are holding a pointer button, normal motion and release keep the
+    // existing capture. Only an explicit policy invalidation bypasses it.
     if (!overridePos.has_value() && !PROTO::data->dndActive() && !m_currentlyHeldButtons.empty() && Desktop::focusState()->surface() &&
-        Desktop::focusState()->surface()->m_mapped && g_pSeatManager->m_state.pointerFocus && !m_hardInput) {
+        Desktop::focusState()->surface()->m_mapped && g_pSeatManager->m_state.pointerFocus && !m_hardInput && !forceInputPolicyRefocus) {
         foundSurface = g_pSeatManager->m_state.pointerFocus.lock();
 
         // IME popups aren't desktop-like elements
@@ -898,6 +898,17 @@ void CInputManager::processMouseDownNormal(const IPointer::SButtonEvent& e, SP<I
     const auto mouseCoords = g_pInputManager->getMouseCoordsInternal();
     const auto w = Desktop::viewState()->hitTest().windowAtForInput(mouseCoords, Desktop::View::ALLOW_FLOATING | Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS);
 
+    const auto POINTER_SURFACE = g_pSeatManager->m_state.pointerFocus.lock();
+    const auto POINTER_HLSURF  = Desktop::View::CWLSurface::fromResource(POINTER_SURFACE);
+    const auto POINTER_VIEW    = POINTER_HLSURF ? POINTER_HLSURF->view() : nullptr;
+    const auto CURRENT_WINDOW  = Desktop::View::CWindow::fromView(POINTER_VIEW);
+    const bool POLICY_TARGET   = (w && w->inputPolicy().hasPolicy()) || (CURRENT_WINDOW && CURRENT_WINDOW->inputPolicy().hasPolicy());
+
+    // The first press synchronizes a policy-aware target. Later presses and
+    // releases intentionally retain the existing button capture.
+    if (e.state == WL_POINTER_BUTTON_STATE_PRESSED && m_currentlyHeldButtons.size() == 1 && POLICY_TARGET && !m_lastFocusOnLS)
+        refocusForInputPolicy();
+
     if (w && !m_lastFocusOnLS && !g_pSessionLockManager->isSessionLocked() && w->checkInputOnDecos(INPUT_TYPE_BUTTON, mouseCoords, e))
         return;
 
@@ -1028,8 +1039,25 @@ void CInputManager::onMouseWheel(IPointer::SAxisEvent e, SP<IPointer> pointer) {
 
     if (!m_lastFocusOnLS) {
         const auto MOUSECOORDS = g_pInputManager->getMouseCoordsInternal();
-        const auto PWINDOW =
+        auto       PWINDOW =
             Desktop::viewState()->hitTest().windowAtForInput(MOUSECOORDS, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
+
+        const auto POINTER_SURFACE = g_pSeatManager->m_state.pointerFocus.lock();
+        const auto POINTER_HLSURF  = Desktop::View::CWLSurface::fromResource(POINTER_SURFACE);
+        const auto POINTER_VIEW    = POINTER_HLSURF ? POINTER_HLSURF->view() : nullptr;
+        const auto CURRENT_WINDOW  = Desktop::View::CWindow::fromView(POINTER_VIEW);
+        const bool POLICY_TARGET   = (PWINDOW && PWINDOW->inputPolicy().hasPolicy()) || (CURRENT_WINDOW && CURRENT_WINDOW->inputPolicy().hasPolicy());
+
+        if (POLICY_TARGET) {
+            // A held-button scroll remains captured; an unheld scroll follows
+            // the current compositor policy target synchronously.
+            if (m_currentlyHeldButtons.empty())
+                refocusForInputPolicy();
+            else
+                refocus();
+
+            PWINDOW = Desktop::viewState()->hitTest().windowAtForInput(MOUSECOORDS, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
+        }
 
         if (PWINDOW) {
             if (PWINDOW->checkInputOnDecos(INPUT_TYPE_AXIS, MOUSECOORDS, e))
@@ -1776,6 +1804,12 @@ bool CInputManager::shouldIgnoreVirtualKeyboard(SP<IKeyboard> pKeyboard) {
 
 void CInputManager::refocus(std::optional<Vector2D> overridePos) {
     mouseMoveUnified(0, true, false, overridePos);
+}
+
+void CInputManager::refocusForInputPolicy() {
+    // A policy update is an explicit focus invalidation. Ordinary motion keeps
+    // the held-button capture; only this path bypasses that retention.
+    mouseMoveUnified(0, true, false, std::nullopt, true);
 }
 
 bool CInputManager::refocusLastWindow(PHLMONITOR pMonitor) {
