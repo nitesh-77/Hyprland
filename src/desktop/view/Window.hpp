@@ -377,6 +377,7 @@ namespace Desktop::View {
         bool                              onSpecialWorkspace();
         void                              activate(bool force = false);
         int                               surfacesCount();
+        bool                              ownsSurface(SP<CWLSurfaceResource> surface) const;
         bool                              clampWindowSize(const std::optional<Vector2D> minSize, const std::optional<Vector2D> maxSize);
         int                               getRealBorderSize() const;
         float                             getScrollMouse();

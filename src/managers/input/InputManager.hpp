@@ -122,7 +122,7 @@ class CInputManager {
 
     Vector2D           getMouseCoordsInternal();
     void               refocus(std::optional<Vector2D> overridePos = std::nullopt);
-    void               refocusForInputPolicy();
+    void               refocusForInputPolicy(PHLWINDOW policyWindow);
     bool               refocusLastWindow(PHLMONITOR pMonitor);
     void               simulateMouseMovement();
     void               sendMotionEventsToFocused();

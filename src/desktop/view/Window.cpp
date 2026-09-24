@@ -963,7 +963,7 @@ std::expected<void, std::string> CWindow::setInputPolicy(std::string_view serial
         return result;
 
     if (g_pInputManager && g_pCompositor && !g_pCompositor->m_isShuttingDown)
-        g_pInputManager->refocusForInputPolicy();
+        g_pInputManager->refocusForInputPolicy(m_self.lock());
 
     return result;
 }
@@ -975,7 +975,7 @@ void CWindow::clearInputPolicy() {
     m_inputPolicy.clear();
 
     if (g_pInputManager && g_pCompositor && !g_pCompositor->m_isShuttingDown)
-        g_pInputManager->refocusForInputPolicy();
+        g_pInputManager->refocusForInputPolicy(m_self.lock());
 }
 
 bool CWindow::isAllowedOverFullscreen() const {
@@ -1302,6 +1302,51 @@ int CWindow::surfacesCount() {
     int no = 0;
     m_wlSurface->resource()->breadthfirst([](SP<CWLSurfaceResource> r, const Vector2D& offset, void* d) { *sc<int*>(d) += 1; }, &no);
     return no;
+}
+
+bool CWindow::ownsSurface(SP<CWLSurfaceResource> surface) const {
+    if (!surface)
+        return false;
+
+    const auto ROOT = m_wlSurface ? m_wlSurface->resource() : nullptr;
+    if (!ROOT)
+        return false;
+
+    const auto containsSurface = [&](SP<CWLSurfaceResource> root) {
+        if (!root)
+            return false;
+        if (root == surface)
+            return true;
+
+        bool found = false;
+        root->breadthfirst(
+            [&found, surface](SP<CWLSurfaceResource> candidate, const Vector2D& offset, void* data) {
+                if (candidate == surface)
+                    found = true;
+            },
+            nullptr);
+        return found;
+    };
+
+    if (containsSurface(ROOT))
+        return true;
+
+    if (m_isX11 || !m_popupHead)
+        return false;
+
+    bool found = false;
+    m_popupHead->breadthfirst(
+        [&found, &containsSurface](SP<CPopup> popup, void* data) {
+            if (!popup || found)
+                return;
+
+            const auto POPUP_SURFACE = popup->wlSurface() ? popup->wlSurface()->resource() : nullptr;
+            if (containsSurface(POPUP_SURFACE))
+                found = true;
+        },
+        nullptr);
+
+    return found;
 }
 
 bool CWindow::clampWindowSize(const std::optional<Vector2D> minSize, const std::optional<Vector2D> maxSize) {

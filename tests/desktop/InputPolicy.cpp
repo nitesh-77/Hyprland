@@ -1,4 +1,5 @@
 #include <desktop/InputPolicy.hpp>
+#include <desktop/InputPolicyCapture.hpp>
 
 #include <gtest/gtest.h>
 
@@ -47,9 +48,8 @@ TEST(InputPolicy, exactCueWireFormatIsParsed) {
     const auto   result = policy.setSerialized(CUE_WIRE, SURFACE_SIZE);
 
     ASSERT_TRUE(result.has_value()) << result.error();
-    ASSERT_TRUE(policy.snapshot().has_value());
-    EXPECT_EQ(policy.snapshot()->version, 1u);
-    EXPECT_EQ(policy.snapshot()->generation, 42u);
+    ASSERT_TRUE(policy.hasPolicy());
+    EXPECT_EQ(policy.generationFloor(), 42u);
     EXPECT_TRUE(policy.containsRootPoint({20.0, 30.0}));
     EXPECT_TRUE(policy.containsRootPoint({60.0, 70.0}));
     EXPECT_FALSE(policy.containsRootPoint({40.0, 30.0}));
@@ -64,7 +64,6 @@ TEST(InputPolicy, rectanglesFormAUnionAndPreserveGaps) {
     EXPECT_TRUE(policy.containsRootPoint({50.0, 50.0}));
     EXPECT_TRUE(policy.containsRootPoint({250.0, 50.0}));
     EXPECT_FALSE(policy.containsRootPoint({150.0, 50.0}));
-    EXPECT_EQ(policy.snapshot()->rectangles.size(), 2u);
 }
 
 TEST(InputPolicy, policyIntersectsInfiniteAndPartialClientRegions) {
@@ -106,23 +105,24 @@ TEST(InputPolicy, emptyClientRegionRemainsEmptyAfterIntersection) {
 TEST(InputPolicy, invalidReplacementDoesNotReplaceLastValidPolicy) {
     CInputPolicy policy;
     ASSERT_TRUE(policy.setSerialized("version=1;generation=4;viewport=800x600;regions=10,10,100,100", SURFACE_SIZE).has_value());
+    ASSERT_TRUE(policy.hasPolicy());
 
     EXPECT_FALSE(policy.setSerialized("version=1;generation=5;viewport=801x600;regions=0,0,10,10", SURFACE_SIZE).has_value());
-    EXPECT_EQ(policy.snapshot()->generation, 4u);
+    EXPECT_EQ(policy.generationFloor(), 4u);
     EXPECT_TRUE(policy.containsRootPoint({20.0, 20.0}));
     EXPECT_FALSE(policy.containsRootPoint({5.0, 5.0}));
     EXPECT_TRUE(policy.viewportMatches(SURFACE_SIZE));
     EXPECT_FALSE(policy.viewportMatches({801.0, 600.0}));
 
     EXPECT_FALSE(policy.setSerialized("version=1;generation=5;viewport=800x600;regions=0,0,0,10", SURFACE_SIZE).has_value());
-    EXPECT_EQ(policy.snapshot()->generation, 4u);
+    EXPECT_EQ(policy.generationFloor(), 4u);
     EXPECT_TRUE(policy.containsRootPoint({20.0, 20.0}));
 
     EXPECT_TRUE(policy.setSerialized("version=1;generation=5;viewport=800x600;regions=0,0,10,10", SURFACE_SIZE).has_value());
-    EXPECT_EQ(policy.snapshot()->generation, 5u);
+    EXPECT_EQ(policy.generationFloor(), 5u);
 
     EXPECT_FALSE(policy.setSerialized("version=1;generation=3;viewport=800x600;regions=0,0,10,10", SURFACE_SIZE).has_value());
-    EXPECT_EQ(policy.snapshot()->generation, 5u);
+    EXPECT_EQ(policy.generationFloor(), 5u);
 }
 
 TEST(InputPolicy, clearKeepsGenerationFloor) {
@@ -133,6 +133,7 @@ TEST(InputPolicy, clearKeepsGenerationFloor) {
 
     EXPECT_FALSE(policy.hasPolicy());
     EXPECT_EQ(policy.generationFloor(), 10u);
+    EXPECT_FALSE(policy.setSerialized("version=1;generation=9;viewport=800x600;regions=0,0,20,20", SURFACE_SIZE).has_value());
     EXPECT_FALSE(policy.setSerialized("version=1;generation=10;viewport=800x600;regions=0,0,20,20", SURFACE_SIZE).has_value());
     EXPECT_TRUE(policy.setSerialized("version=1;generation=11;viewport=800x600;regions=0,0,20,20", SURFACE_SIZE).has_value());
     EXPECT_TRUE(policy.hasPolicy());
@@ -149,6 +150,22 @@ TEST(InputPolicy, malformedAndOversizedSnapshotsAreRejected) {
     const std::string oversized(CInputPolicy::MAX_SERIALIZED_SIZE + 1, 'x');
     EXPECT_FALSE(policy.setSerialized(oversized, SURFACE_SIZE).has_value());
     EXPECT_FALSE(policy.hasPolicy());
+}
+
+TEST(InputPolicy, policyCaptureDecisionOnlyCancelsSameWindowCapture) {
+    const auto SAME_OWNER  = decideInputPolicyCapture(true, true, false);
+    const auto OTHER_OWNER = decideInputPolicyCapture(false, true, false);
+    const auto NO_BUTTONS  = decideInputPolicyCapture(false, false, false);
+    const auto DND_ACTIVE  = decideInputPolicyCapture(true, true, true);
+
+    EXPECT_TRUE(SAME_OWNER.cancelHeldButtons);
+    EXPECT_TRUE(SAME_OWNER.forcePolicyRefocus);
+    EXPECT_FALSE(OTHER_OWNER.cancelHeldButtons);
+    EXPECT_FALSE(OTHER_OWNER.forcePolicyRefocus);
+    EXPECT_FALSE(NO_BUTTONS.cancelHeldButtons);
+    EXPECT_TRUE(NO_BUTTONS.forcePolicyRefocus);
+    EXPECT_FALSE(DND_ACTIVE.cancelHeldButtons);
+    EXPECT_FALSE(DND_ACTIVE.forcePolicyRefocus);
 }
 
 TEST(InputPolicy, clearRestoresUnsetBehavior) {

@@ -9,6 +9,7 @@
 #include "../../config/shared/actions/ConfigActions.hpp"
 #include "../../config/legacy/ConfigManager.hpp"
 
+#include "../../desktop/InputPolicyCapture.hpp"
 #include "../../desktop/view/WLSurface.hpp"
 #include "../../desktop/state/FocusState.hpp"
 #include "../../desktop/state/WindowState.hpp"
@@ -221,6 +222,17 @@ void CInputManager::sendMotionEventsToFocused() {
 
     if (!BOX)
         return;
+
+    auto FOCUSED_WINDOW = Desktop::focusState()->window();
+    if (!FOCUSED_WINDOW)
+        FOCUSED_WINDOW = Desktop::View::CWindow::fromView(VIEW);
+
+    if (FOCUSED_WINDOW && FOCUSED_WINDOW->inputPolicy().hasPolicy()) {
+        Vector2D   surfaceLocal;
+        const auto HIT_SURFACE = Desktop::viewState()->hitTest().inputSurfaceAt(getMouseCoordsInternal(), FOCUSED_WINDOW, surfaceLocal);
+        if (HIT_SURFACE != SURF)
+            return;
+    }
 
     m_emptyFocusCursorSet = false;
 
@@ -898,17 +910,6 @@ void CInputManager::processMouseDownNormal(const IPointer::SButtonEvent& e, SP<I
     const auto mouseCoords = g_pInputManager->getMouseCoordsInternal();
     const auto w = Desktop::viewState()->hitTest().windowAtForInput(mouseCoords, Desktop::View::ALLOW_FLOATING | Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS);
 
-    const auto POINTER_SURFACE = g_pSeatManager->m_state.pointerFocus.lock();
-    const auto POINTER_HLSURF  = Desktop::View::CWLSurface::fromResource(POINTER_SURFACE);
-    const auto POINTER_VIEW    = POINTER_HLSURF ? POINTER_HLSURF->view() : nullptr;
-    const auto CURRENT_WINDOW  = Desktop::View::CWindow::fromView(POINTER_VIEW);
-    const bool POLICY_TARGET   = (w && w->inputPolicy().hasPolicy()) || (CURRENT_WINDOW && CURRENT_WINDOW->inputPolicy().hasPolicy());
-
-    // The first press synchronizes a policy-aware target. Later presses and
-    // releases intentionally retain the existing button capture.
-    if (e.state == WL_POINTER_BUTTON_STATE_PRESSED && m_currentlyHeldButtons.size() == 1 && POLICY_TARGET && !m_lastFocusOnLS)
-        refocusForInputPolicy();
-
     if (w && !m_lastFocusOnLS && !g_pSessionLockManager->isSessionLocked() && w->checkInputOnDecos(INPUT_TYPE_BUTTON, mouseCoords, e))
         return;
 
@@ -1049,12 +1050,9 @@ void CInputManager::onMouseWheel(IPointer::SAxisEvent e, SP<IPointer> pointer) {
         const bool POLICY_TARGET   = (PWINDOW && PWINDOW->inputPolicy().hasPolicy()) || (CURRENT_WINDOW && CURRENT_WINDOW->inputPolicy().hasPolicy());
 
         if (POLICY_TARGET) {
-            // A held-button scroll remains captured; an unheld scroll follows
-            // the current compositor policy target synchronously.
-            if (m_currentlyHeldButtons.empty())
-                refocusForInputPolicy();
-            else
-                refocus();
+            // Normal held-button capture remains intentional; refocus() also
+            // synchronizes an unheld wheel event to the policy-aware target.
+            refocus();
 
             PWINDOW = Desktop::viewState()->hitTest().windowAtForInput(MOUSECOORDS, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
         }
@@ -1806,10 +1804,28 @@ void CInputManager::refocus(std::optional<Vector2D> overridePos) {
     mouseMoveUnified(0, true, false, overridePos);
 }
 
-void CInputManager::refocusForInputPolicy() {
-    // A policy update is an explicit focus invalidation. Ordinary motion keeps
-    // the held-button capture; only this path bypasses that retention.
-    mouseMoveUnified(0, true, false, std::nullopt, true);
+void CInputManager::refocusForInputPolicy(PHLWINDOW policyWindow) {
+    const auto POINTER_SURFACE = g_pSeatManager->m_state.pointerFocus.lock();
+    const bool OWNS_POINTER    = policyWindow && policyWindow->ownsSurface(POINTER_SURFACE);
+    const auto DECISION        = Desktop::decideInputPolicyCapture(OWNS_POINTER, !m_currentlyHeldButtons.empty(), PROTO::data->dndActive());
+
+    if (DECISION.cancelHeldButtons) {
+        // releaseAllMouseButtons() sends the synthetic releases and clears the
+        // held-button list. The following hardware release is then harmless via
+        // onMouseButton's unmatched-release guard.
+        releaseAllMouseButtons();
+        g_pSeatManager->sendPointerFrame();
+        m_focusHeldByButtons   = false;
+        m_refocusHeldByButtons = false;
+    }
+
+    if (DECISION.forcePolicyRefocus) {
+        // A policy update is an explicit focus invalidation. Ordinary motion
+        // keeps the held-button capture; only this path bypasses retention.
+        mouseMoveUnified(0, true, false, std::nullopt, true);
+    } else {
+        refocus();
+    }
 }
 
 bool CInputManager::refocusLastWindow(PHLMONITOR pMonitor) {
