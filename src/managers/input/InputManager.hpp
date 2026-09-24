@@ -247,8 +247,10 @@ class CInputManager {
 
     uint32_t           m_capabilities = 0;
 
-    void            mouseMoveUnified(uint32_t, bool refocus = false, bool mouse = false, std::optional<Vector2D> overridePos = std::nullopt, bool forceInputPolicyRefocus = false);
+    void            mouseMoveUnified(uint32_t, bool refocus = false, bool mouse = false, std::optional<Vector2D> overridePos = std::nullopt, bool forceInputPolicyRefocus = false,
+                                     bool pointerOnly = false);
     void            recheckMouseWarpOnMouseInput();
+    void            flushPendingInputPolicyRefocus();
 
     SP<CTabletTool> ensureTabletToolPresent(SP<Aquamarine::ITabletTool>);
 
@@ -270,6 +272,10 @@ class CInputManager {
 
     // for releasing mouse buttons
     std::list<uint32_t> m_currentlyHeldButtons;
+
+    // policy invalidation is deferred while DnD owns the pointer
+    PHLWINDOWREF m_pendingInputPolicyWindow;
+    bool         m_inputPolicyRefocusPending = false;
 
     // idle inhibitors
     struct SIdleInhibitor {

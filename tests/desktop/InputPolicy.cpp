@@ -26,7 +26,6 @@ TEST(InputPolicy, unsetPolicyLeavesClientRegionUnchanged) {
     const auto   clientRegion = fullSurfaceRegion();
 
     EXPECT_FALSE(policy.hasPolicy());
-    EXPECT_TRUE(policy.effectiveInputRegion(clientRegion, SURFACE_SIZE).containsPoint({400.0, 300.0}));
     EXPECT_TRUE(policy.acceptsPoint({400.0, 300.0}, clientRegion, {400.0, 300.0}, SURFACE_SIZE));
 }
 
@@ -37,8 +36,6 @@ TEST(InputPolicy, emptyPolicyIsPresentAndBlocksAllInput) {
 
     ASSERT_TRUE(result.has_value()) << result.error();
     EXPECT_TRUE(policy.hasPolicy());
-    EXPECT_TRUE(policy.region().empty());
-    EXPECT_TRUE(policy.effectiveInputRegion(fullSurfaceRegion(), SURFACE_SIZE).empty());
     EXPECT_FALSE(policy.acceptsPoint({400.0, 300.0}, fullSurfaceRegion(), {400.0, 300.0}, SURFACE_SIZE));
 }
 
@@ -71,14 +68,12 @@ TEST(InputPolicy, policyIntersectsInfiniteAndPartialClientRegions) {
     ASSERT_TRUE(policy.setSerialized("version=1;generation=3;viewport=800x600;regions=100,100,200,200", SURFACE_SIZE).has_value());
 
     // An infinite wl_surface input region is materialized as the full surface.
-    const auto effectiveFull = policy.effectiveInputRegion(fullSurfaceRegion(), SURFACE_SIZE);
-    EXPECT_TRUE(effectiveFull.containsPoint({150.0, 150.0}));
-    EXPECT_FALSE(effectiveFull.containsPoint({50.0, 50.0}));
+    EXPECT_TRUE(policy.acceptsPoint({150.0, 150.0}, fullSurfaceRegion(), {150.0, 150.0}, SURFACE_SIZE));
+    EXPECT_FALSE(policy.acceptsPoint({50.0, 50.0}, fullSurfaceRegion(), {50.0, 50.0}, SURFACE_SIZE));
 
-    const auto effectivePartial = policy.effectiveInputRegion(partialClientRegion(), SURFACE_SIZE);
-    EXPECT_TRUE(effectivePartial.containsPoint({150.0, 150.0}));
-    EXPECT_FALSE(effectivePartial.containsPoint({350.0, 350.0}));
-    EXPECT_FALSE(effectivePartial.containsPoint({550.0, 450.0}));
+    EXPECT_TRUE(policy.acceptsPoint({150.0, 150.0}, partialClientRegion(), {150.0, 150.0}, SURFACE_SIZE));
+    EXPECT_FALSE(policy.acceptsPoint({350.0, 350.0}, partialClientRegion(), {350.0, 350.0}, SURFACE_SIZE));
+    EXPECT_FALSE(policy.acceptsPoint({550.0, 450.0}, partialClientRegion(), {550.0, 450.0}, SURFACE_SIZE));
 }
 
 TEST(InputPolicy, acceptsPointKeepsRootAndSurfaceCoordinatesSeparate) {
@@ -98,7 +93,6 @@ TEST(InputPolicy, emptyClientRegionRemainsEmptyAfterIntersection) {
     ASSERT_TRUE(policy.setSerialized("version=1;generation=3;viewport=800x600;regions=0,0,800,600", SURFACE_SIZE).has_value());
 
     const CRegion emptyClientRegion;
-    EXPECT_TRUE(policy.effectiveInputRegion(emptyClientRegion, SURFACE_SIZE).empty());
     EXPECT_FALSE(policy.acceptsPoint({10.0, 10.0}, emptyClientRegion, {10.0, 10.0}, SURFACE_SIZE));
 }
 
@@ -160,12 +154,16 @@ TEST(InputPolicy, policyCaptureDecisionOnlyCancelsSameWindowCapture) {
 
     EXPECT_TRUE(SAME_OWNER.cancelHeldButtons);
     EXPECT_TRUE(SAME_OWNER.forcePolicyRefocus);
+    EXPECT_TRUE(SAME_OWNER.pointerOnly);
     EXPECT_FALSE(OTHER_OWNER.cancelHeldButtons);
     EXPECT_FALSE(OTHER_OWNER.forcePolicyRefocus);
+    EXPECT_TRUE(OTHER_OWNER.pointerOnly);
     EXPECT_FALSE(NO_BUTTONS.cancelHeldButtons);
     EXPECT_TRUE(NO_BUTTONS.forcePolicyRefocus);
+    EXPECT_TRUE(NO_BUTTONS.pointerOnly);
     EXPECT_FALSE(DND_ACTIVE.cancelHeldButtons);
     EXPECT_FALSE(DND_ACTIVE.forcePolicyRefocus);
+    EXPECT_TRUE(DND_ACTIVE.pointerOnly);
 }
 
 TEST(InputPolicy, clearRestoresUnsetBehavior) {
@@ -176,5 +174,5 @@ TEST(InputPolicy, clearRestoresUnsetBehavior) {
     policy.clear();
 
     EXPECT_FALSE(policy.hasPolicy());
-    EXPECT_TRUE(policy.effectiveInputRegion(fullSurfaceRegion(), SURFACE_SIZE).containsPoint({400.0, 300.0}));
+    EXPECT_TRUE(policy.acceptsPoint({400.0, 300.0}, fullSurfaceRegion(), {400.0, 300.0}, SURFACE_SIZE));
 }

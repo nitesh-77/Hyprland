@@ -4,6 +4,7 @@ namespace Desktop {
     struct SInputPolicyCaptureDecision {
         bool cancelHeldButtons  = false;
         bool forcePolicyRefocus = false;
+        bool pointerOnly        = true;
     };
 
     constexpr SInputPolicyCaptureDecision decideInputPolicyCapture(bool policyWindowOwnsPointer, bool buttonsHeld, bool dndActive) {

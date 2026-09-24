@@ -179,21 +179,6 @@ const std::optional<SInputPolicySnapshot>& CInputPolicy::snapshot() const {
     return m_snapshot;
 }
 
-CRegion CInputPolicy::region() const {
-    return m_snapshot ? m_snapshot->region.copy() : CRegion{};
-}
-
-CRegion CInputPolicy::effectiveInputRegion(const CRegion& clientRegionInRootCoordinates, const Vector2D& rootSize) const {
-    if (!m_snapshot)
-        return clientRegionInRootCoordinates;
-
-    auto effective = clientRegionInRootCoordinates.copy();
-    effective.intersect(m_snapshot->region);
-    if (rootSize.x > 0.0 && rootSize.y > 0.0)
-        effective.intersect(CBox{{}, rootSize});
-    return effective;
-}
-
 bool CInputPolicy::acceptsPoint(const Vector2D& rootPoint, const CRegion& clientRegion, const Vector2D& surfaceLocalPoint, const Vector2D& surfaceSize) const {
     auto effectiveClientRegion = clientRegion.copy();
     if (surfaceSize.x > 0.0 && surfaceSize.y > 0.0)
@@ -202,11 +187,11 @@ bool CInputPolicy::acceptsPoint(const Vector2D& rootPoint, const CRegion& client
     if (!effectiveClientRegion.containsPoint(surfaceLocalPoint))
         return false;
 
-    return !m_snapshot || m_snapshot->region.containsPoint(rootPoint);
+    return !m_snapshot || m_region.containsPoint(rootPoint);
 }
 
 bool CInputPolicy::containsRootPoint(const Vector2D& rootPoint) const {
-    return !m_snapshot || m_snapshot->region.containsPoint(rootPoint);
+    return !m_snapshot || m_region.containsPoint(rootPoint);
 }
 
 bool CInputPolicy::viewportMatches(const Vector2D& rootSize) const {
@@ -257,7 +242,7 @@ std::expected<void, std::string> CInputPolicy::setSnapshot(SInputPolicySnapshot 
     }
 
     const auto GENERATION = snapshot.generation;
-    snapshot.region       = std::move(region);
+    m_region              = std::move(region);
     m_snapshot            = std::move(snapshot);
     m_generationFloor     = GENERATION;
     return {};
@@ -265,4 +250,5 @@ std::expected<void, std::string> CInputPolicy::setSnapshot(SInputPolicySnapshot 
 
 void CInputPolicy::clear() {
     m_snapshot.reset();
+    m_region.clear();
 }

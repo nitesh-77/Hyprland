@@ -126,6 +126,8 @@ CInputManager::~CInputManager() {
 }
 
 void CInputManager::onMouseMoved(IPointer::SMotionEvent e) {
+    flushPendingInputPolicyRefocus();
+
     static auto PNOACCEL = CConfigValue<Config::INTEGER>("input:force_no_accel");
 
     Vector2D    delta   = e.delta;
@@ -172,6 +174,8 @@ void CInputManager::onMouseMoved(IPointer::SMotionEvent e) {
 }
 
 void CInputManager::onMouseWarp(IPointer::SMotionAbsoluteEvent e) {
+    flushPendingInputPolicyRefocus();
+
     Pointer::mgr()->warpAbsolute(e.absolute, e.device);
 
     mouseMoveUnified(e.timeMs);
@@ -239,7 +243,7 @@ void CInputManager::sendMotionEventsToFocused() {
     g_pSeatManager->setPointerFocus(Desktop::focusState()->surface(), getMouseCoordsInternal().floor() - BOX->pos());
 }
 
-void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, std::optional<Vector2D> overridePos, bool forceInputPolicyRefocus) {
+void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, std::optional<Vector2D> overridePos, bool forceInputPolicyRefocus, bool pointerOnly) {
     m_lastInputMouse = mouse;
 
     if (g_pCompositor->m_isShuttingDown)
@@ -355,7 +359,7 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
         }
     }
 
-    if (PMONITOR != Desktop::focusState()->monitor() && (*PMOUSEFOCUSMON || refocus) && m_forcedFocus.expired())
+    if (!pointerOnly && PMONITOR != Desktop::focusState()->monitor() && (*PMOUSEFOCUSMON || refocus) && m_forcedFocus.expired())
         Desktop::focusState()->rawMonitorFocus(PMONITOR);
 
     // IME popups essentially always exist on the top - they are transient,
@@ -381,7 +385,8 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
         const auto PSESSIONLOCKSURFACE = g_pSessionLockManager->getSessionLockSurfaceForMonitor(PMONITOR->m_id);
         const auto foundLockSurface    = PSESSIONLOCKSURFACE ? PSESSIONLOCKSURFACE->surface->surface() : nullptr;
 
-        Desktop::focusState()->rawSurfaceFocus(foundLockSurface);
+        if (!pointerOnly)
+            Desktop::focusState()->rawSurfaceFocus(foundLockSurface);
 
         // search for interactable abovelock surfaces for pointer focus, or use session lock surface if not found
         for (auto& lsl : PMONITOR->m_layerSurfaceLayers | std::views::reverse) {
@@ -396,7 +401,7 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
             foundSurface  = foundLockSurface;
         }
 
-        if (refocus) {
+        if (refocus && !pointerOnly) {
             m_foundLSToFocus      = pFoundLayerSurface;
             m_foundWindowToFocus  = pFoundWindow;
             m_foundSurfaceToFocus = foundSurface;
@@ -655,7 +660,7 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
 
         g_pSeatManager->setPointerFocus(nullptr, {});
 
-        if (refocus || !Desktop::focusState()->window()) // if we are forcing a refocus, and we don't find a surface, clear the kb focus too!
+        if (!pointerOnly && (refocus || !Desktop::focusState()->window())) // if we are forcing a refocus, and we don't find a surface, clear the kb focus too!
             Desktop::focusState()->rawWindowFocus(nullptr, FOCUS_REASON);
 
         return;
@@ -715,7 +720,7 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
             if (pFoundWindow != Desktop::focusState()->window() && Desktop::focusState()->window() &&
                 ((pFoundWindow->m_isFloating && *PFLOATBEHAVIOR == 2) || (Desktop::focusState()->window()->m_isFloating != pFoundWindow->m_isFloating && *PFLOATBEHAVIOR != 0))) {
                 // enter if change floating style
-                if (FOLLOWMOUSE != 3 && allowKeyboardRefocus)
+                if (!pointerOnly && FOLLOWMOUSE != 3 && allowKeyboardRefocus)
                     Desktop::focusState()->rawWindowFocus(pFoundWindow, FOCUS_REASON, foundSurface);
                 g_pSeatManager->setPointerFocus(foundSurface, surfaceLocal);
             } else if (FOLLOWMOUSE == 2 || FOLLOWMOUSE == 3)
@@ -735,7 +740,7 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
         } else {
             auto lastFocus = m_lastMouseFocus.lock();
 
-            if (allowKeyboardRefocus && ((FOLLOWMOUSE != 3 && (*PMOUSEREFOCUS || lastFocus != pFoundWindow)) || refocus)) {
+            if (!pointerOnly && allowKeyboardRefocus && ((FOLLOWMOUSE != 3 && (*PMOUSEREFOCUS || lastFocus != pFoundWindow)) || refocus)) {
                 if (lastFocus != pFoundWindow || Desktop::focusState()->window() != pFoundWindow || Desktop::focusState()->surface() != foundSurface || refocus) {
 
                     m_lastMouseFocus = pFoundWindow;
@@ -755,7 +760,7 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
             }
         }
 
-        if (g_pSeatManager->m_state.keyboardFocus == nullptr)
+        if (!pointerOnly && g_pSeatManager->m_state.keyboardFocus == nullptr)
             Desktop::focusState()->rawWindowFocus(pFoundWindow, FOCUS_REASON, foundSurface);
 
         m_lastFocusOnLS = false;
@@ -765,8 +770,8 @@ void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, st
             Pointer::Cursor::overrideController->unsetOverride(Pointer::Cursor::CURSOR_OVERRIDE_WINDOW_EDGE);
         }
 
-        if (pFoundLayerSurface && (pFoundLayerSurface->m_layerSurface->m_current.interactivity != ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE) && FOLLOWMOUSE != 3 &&
-            (allowKeyboardRefocus || pFoundLayerSurface->m_layerSurface->m_current.interactivity == ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE)) {
+        if (!pointerOnly && pFoundLayerSurface && (pFoundLayerSurface->m_layerSurface->m_current.interactivity != ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE) &&
+            FOLLOWMOUSE != 3 && (allowKeyboardRefocus || pFoundLayerSurface->m_layerSurface->m_current.interactivity == ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE)) {
             Desktop::focusState()->rawSurfaceFocus(foundSurface);
         }
 
@@ -1805,6 +1810,17 @@ void CInputManager::refocus(std::optional<Vector2D> overridePos) {
 }
 
 void CInputManager::refocusForInputPolicy(PHLWINDOW policyWindow) {
+    if (PROTO::data->dndActive()) {
+        // Keep DnD's existing capture untouched; apply the policy on the next
+        // normal pointer update after DnD has ended.
+        m_pendingInputPolicyWindow  = policyWindow;
+        m_inputPolicyRefocusPending = true;
+        return;
+    }
+
+    m_pendingInputPolicyWindow.reset();
+    m_inputPolicyRefocusPending = false;
+
     const auto POINTER_SURFACE = g_pSeatManager->m_state.pointerFocus.lock();
     const bool OWNS_POINTER    = policyWindow && policyWindow->ownsSurface(POINTER_SURFACE);
     const auto DECISION        = Desktop::decideInputPolicyCapture(OWNS_POINTER, !m_currentlyHeldButtons.empty(), PROTO::data->dndActive());
@@ -1820,12 +1836,22 @@ void CInputManager::refocusForInputPolicy(PHLWINDOW policyWindow) {
     }
 
     if (DECISION.forcePolicyRefocus) {
-        // A policy update is an explicit focus invalidation. Ordinary motion
-        // keeps the held-button capture; only this path bypasses retention.
-        mouseMoveUnified(0, true, false, std::nullopt, true);
-    } else {
-        refocus();
+        // A policy update is an explicit pointer-focus invalidation. Ordinary
+        // motion keeps held-button capture; only this path bypasses retention.
+        mouseMoveUnified(0, true, false, std::nullopt, true, DECISION.pointerOnly);
     }
+}
+
+void CInputManager::flushPendingInputPolicyRefocus() {
+    if (!m_inputPolicyRefocusPending || PROTO::data->dndActive())
+        return;
+
+    const auto WINDOW = m_pendingInputPolicyWindow.lock();
+    m_pendingInputPolicyWindow.reset();
+    m_inputPolicyRefocusPending = false;
+
+    if (WINDOW)
+        refocusForInputPolicy(WINDOW);
 }
 
 bool CInputManager::refocusLastWindow(PHLMONITOR pMonitor) {

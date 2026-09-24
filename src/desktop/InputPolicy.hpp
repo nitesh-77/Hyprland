@@ -27,7 +27,6 @@ namespace Desktop {
         uint64_t          generation = 0;
         CBox              viewport   = {};
         std::vector<CBox> rectangles;
-        CRegion           region;
     };
 
     class CInputPolicy {
@@ -40,9 +39,6 @@ namespace Desktop {
         bool                                       hasPolicy() const;
         uint64_t                                   generationFloor() const;
         const std::optional<SInputPolicySnapshot>& snapshot() const;
-        CRegion                                    region() const;
-        // The region argument must already be translated into root coordinates.
-        CRegion                          effectiveInputRegion(const CRegion& clientRegionInRootCoordinates, const Vector2D& rootSize) const;
         bool                             acceptsPoint(const Vector2D& rootPoint, const CRegion& clientRegion, const Vector2D& surfaceLocalPoint, const Vector2D& surfaceSize) const;
         bool                             containsRootPoint(const Vector2D& rootPoint) const;
         bool                             viewportMatches(const Vector2D& rootSize) const;
@@ -53,6 +49,7 @@ namespace Desktop {
 
       private:
         std::optional<SInputPolicySnapshot> m_snapshot;
+        CRegion                             m_region;
         uint64_t                            m_generationFloor = 0;
     };
 }
