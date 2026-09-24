@@ -35,6 +35,7 @@ namespace Desktop::View {
 
         Vector2D                       coordsRelativeToParent() const;
         Vector2D                       coordsGlobal() const;
+        SP<Desktop::View::CWLSurface>  getT1Owner() const;
 
         Vector2D                       size();
 
