@@ -122,6 +122,7 @@ class CInputManager {
 
     Vector2D           getMouseCoordsInternal();
     void               refocus(std::optional<Vector2D> overridePos = std::nullopt);
+    void               refocusForInputPolicy(PHLWINDOW policyWindow);
     bool               refocusLastWindow(PHLMONITOR pMonitor);
     void               simulateMouseMovement();
     void               sendMotionEventsToFocused();
@@ -246,12 +247,14 @@ class CInputManager {
 
     uint32_t           m_capabilities = 0;
 
-    void               mouseMoveUnified(uint32_t, bool refocus = false, bool mouse = false, std::optional<Vector2D> overridePos = std::nullopt);
-    void               recheckMouseWarpOnMouseInput();
+    void            mouseMoveUnified(uint32_t, bool refocus = false, bool mouse = false, std::optional<Vector2D> overridePos = std::nullopt, bool forceInputPolicyRefocus = false,
+                                     bool pointerOnly = false);
+    void            recheckMouseWarpOnMouseInput();
+    void            flushPendingInputPolicyRefocus();
 
-    SP<CTabletTool>    ensureTabletToolPresent(SP<Aquamarine::ITabletTool>);
+    SP<CTabletTool> ensureTabletToolPresent(SP<Aquamarine::ITabletTool>);
 
-    void               applyConfigToKeyboard(SP<IKeyboard>);
+    void            applyConfigToKeyboard(SP<IKeyboard>);
 
     // this will be set after a refocus()
     WP<CWLSurfaceResource> m_foundSurfaceToFocus;
@@ -269,6 +272,10 @@ class CInputManager {
 
     // for releasing mouse buttons
     std::list<uint32_t> m_currentlyHeldButtons;
+
+    // policy invalidation is deferred while DnD owns the pointer
+    PHLWINDOWREF m_pendingInputPolicyWindow;
+    bool         m_inputPolicyRefocusPending = false;
 
     // idle inhibitors
     struct SIdleInhibitor {

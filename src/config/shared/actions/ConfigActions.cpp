@@ -734,6 +734,19 @@ ActionResult Actions::setProp(const std::string& PROP, const std::string& VAL, s
     if (!PWINDOW)
         return {};
 
+    if (PROP == "input_regions") {
+        if (VAL == "unset" || VAL == "clear") {
+            PWINDOW->clearInputPolicy();
+            return {};
+        }
+
+        auto result = PWINDOW->setInputPolicy(VAL);
+        if (!result)
+            return actionError(std::format("Invalid input_regions: {}", result.error()), eActionErrorLevel::ERROR, eActionErrorCode::INVALID_ARGUMENT);
+
+        return {};
+    }
+
     try {
         if (PROP == "max_size") {
             const auto SIZE = PWINDOW->calculateExpression(VAL);
