@@ -231,7 +231,8 @@ class CInputManager {
 
     bool                 m_cursorImageOverridden   = false;
     bool                 m_captureSafeCursorActive = false;
-    eBorderIconDirection m_borderIconDirection     = BORDERICON_NONE;
+    std::string          m_cursorOverrideShape;
+    eBorderIconDirection m_borderIconDirection = BORDERICON_NONE;
 
     // for click behavior override
     eClickBehaviorMode m_clickBehavior        = CLICKMODE_DEFAULT;
@@ -299,7 +300,7 @@ class CInputManager {
     } m_cursorSurfaceInfo;
 
     void restoreCursorIconToApp(); // no-op if restored
-    bool isPointerFocusedOnCaptureExcludedWindow() const;
+    bool shouldUseCaptureSafeCursor() const;
 
     // discrete scrolling emulation using v120 data
     struct {

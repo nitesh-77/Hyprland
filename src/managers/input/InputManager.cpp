@@ -102,12 +102,12 @@ CInputManager::CInputManager() {
     m_listeners.setCursor = g_pSeatManager->m_events.setCursor.listen([this](const auto& event) { processMouseRequest(event); });
 
     m_listeners.pointerFocusChange = g_pSeatManager->m_events.pointerFocusChange.listen([this] {
-        if (m_cursorImageOverridden)
-            return;
-
-        if (isPointerFocusedOnCaptureExcludedWindow()) {
+        if (shouldUseCaptureSafeCursor()) {
             m_captureSafeCursorActive = true;
             g_pHyprRenderer->setCursorFromName("left_ptr");
+        } else if (m_cursorImageOverridden) {
+            m_captureSafeCursorActive = false;
+            g_pHyprRenderer->setCursorFromName(m_cursorOverrideShape);
         } else if (m_captureSafeCursorActive) {
             // The next client may not send a cursor immediately after pointer enter.
             m_captureSafeCursorActive = false;
@@ -116,6 +116,8 @@ CInputManager::CInputManager() {
     });
 
     m_listeners.overrideChanged = Pointer::Cursor::overrideController->m_events.overrideChanged.listen([this](const std::string& shape) {
+        m_cursorOverrideShape = shape;
+
         if (shape.empty()) {
             m_cursorImageOverridden = false;
             restoreCursorIconToApp();
@@ -123,7 +125,11 @@ CInputManager::CInputManager() {
         }
 
         m_cursorImageOverridden = true;
-        g_pHyprRenderer->setCursorFromName(shape);
+        if (shouldUseCaptureSafeCursor()) {
+            m_captureSafeCursorActive = true;
+            g_pHyprRenderer->setCursorFromName("left_ptr");
+        } else
+            g_pHyprRenderer->setCursorFromName(shape);
     });
 
     m_cursorSurfaceInfo.wlSurface = Desktop::View::CWLSurface::create();
@@ -873,7 +879,7 @@ void CInputManager::processMouseRequest(const CSeatManager::SSetCursorEvent& eve
 void CInputManager::restoreCursorIconToApp() {
     // The pointer is composited into captures even when its focused window is excluded.
     // Keep the local pointer usable without revealing the client's hover shape in a share.
-    if (isPointerFocusedOnCaptureExcludedWindow()) {
+    if (shouldUseCaptureSafeCursor()) {
         m_captureSafeCursorActive = true;
         g_pHyprRenderer->setCursorFromName("left_ptr");
         return;
@@ -893,7 +899,12 @@ void CInputManager::restoreCursorIconToApp() {
         g_pHyprRenderer->setCursorFromName(m_cursorSurfaceInfo.name);
 }
 
-bool CInputManager::isPointerFocusedOnCaptureExcludedWindow() const {
+bool CInputManager::shouldUseCaptureSafeCursor() const {
+    if (const auto DRAGTARGET = g_layoutManager->dragController()->target(); DRAGTARGET && DRAGTARGET->window()) {
+        const auto WINDOW = DRAGTARGET->window();
+        return WINDOW->m_ruleApplicator && WINDOW->m_ruleApplicator->noScreenShare().valueOrDefault();
+    }
+
     const auto FOCUS   = g_pSeatManager->m_state.pointerFocus.lock();
     const auto SURFACE = Desktop::View::CWLSurface::fromResource(FOCUS);
     auto       view    = SURFACE ? SURFACE->view() : nullptr;
